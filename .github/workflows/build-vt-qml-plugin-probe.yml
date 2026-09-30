@@ -1,0 +1,66 @@
+name: Build VT QML plugin probe
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "qml/vt-plugin-probe/**"
+      - ".github/workflows/build-vt-qml-plugin-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ARM QML plugin against Qt 5.9 / glibc 2.27
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            ubuntu:18.04 \
+            bash -lc '
+              set -eux
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                g++-arm-linux-gnueabi gcc-arm-linux-gnueabi \
+                libc6-dev-armel-cross libstdc++-7-dev-armel-cross \
+                qtbase5-dev qtbase5-dev-tools qtdeclarative5-dev \
+                file ca-certificates
+
+              SRC=qml/vt-plugin-probe
+              OUT=dist-vtplugin
+              mkdir -p "$OUT/Probe/Native"
+
+              moc "$SRC/vtprobeplugin.cpp" -o "$SRC/vtprobeplugin.moc"
+
+              arm-linux-gnueabi-g++ \
+                -std=gnu++11 -O2 -fPIC -shared \
+                -march=armv7-a -mthumb -mfloat-abi=soft \
+                -I/usr/include/x86_64-linux-gnu/qt5 \
+                -I/usr/include/x86_64-linux-gnu/qt5/QtCore \
+                -I/usr/include/x86_64-linux-gnu/qt5/QtQml \
+                -o "$OUT/Probe/Native/libvtprobeplugin.so" \
+                "$SRC/vtprobeplugin.cpp" \
+                -ldl -lpthread
+
+              cp "$SRC/qmldir" "$OUT/Probe/Native/qmldir"
+              cp "$SRC/main.qml" "$OUT/main.qml"
+              cp "$SRC/appinfo.json" "$OUT/appinfo.json"
+              printf "%s" "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZzQsAAAAASUVORK5CYII=" | base64 -d > "$OUT/icon.png"
+
+              file "$OUT/Probe/Native/libvtprobeplugin.so"
+              arm-linux-gnueabi-readelf -h "$OUT/Probe/Native/libvtprobeplugin.so"
+              arm-linux-gnueabi-readelf -V "$OUT/Probe/Native/libvtprobeplugin.so" | grep -o "GLIBC_[0-9.]*" | sort -Vu || true
+              arm-linux-gnueabi-readelf -V "$OUT/Probe/Native/libvtprobeplugin.so" | grep -o "GLIBCXX_[0-9.]*" | sort -Vu || true
+            '
+
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: vt-qml-plugin-probe-app
+          path: dist-vtplugin/
+          retention-days: 7
