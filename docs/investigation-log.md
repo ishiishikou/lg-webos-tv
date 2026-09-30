@@ -230,3 +230,38 @@ Multiple concurrent SSAP `executeOneShot` calls do not generate independent fram
 SSAP format requests for JPG, PNG, RGB, and YUV422 all returned the same JPEG resource. The public API adapter therefore normalizes screenshot output rather than exposing raw capture buffers.
 
 This leaves the dedicated VT capture path as the main high-FPS route, but it remains behind both LS2 privilege and the hidden `/dev/video60` device boundary.
+
+
+### LG V4L2 capture ABI identified
+
+Public LG-derived V4L2 extension headers were located that match the capture IDs observed in runtime logs.
+
+Important capture controls include:
+
+```text
+V4L2_CID_EXT_CAPTURE_CAPABILITY_INFO
+V4L2_CID_EXT_CAPTURE_PLANE_INFO
+V4L2_CID_EXT_CAPTURE_VIDEO_WIN_INFO
+V4L2_CID_EXT_CAPTURE_PLANE_PROP
+V4L2_CID_EXT_CAPTURE_FREEZE_MODE
+V4L2_CID_EXT_CAPTURE_DONE_USER_PROCESSING
+V4L2_CID_EXT_CAPTURE_PHYSICAL_MEMORY_INFO
+V4L2_CID_EXT_CAPTURE_OUTPUT_FRAMERATE
+V4L2_CID_EXT_CAPTURE_DIVIDE_FRAMERATE
+```
+
+The capture location enum contains:
+
+```text
+SCALER_INPUT
+SCALER_OUTPUT
+DISPLAY_OUTPUT
+BLENDED_OUTPUT
+OSD_OUTPUT
+```
+
+and `v4l2_ext_capture_plane_prop` carries the selected location, capture rectangle, and buffer count.
+
+This aligns with both the on-device `libvtcapture` strings and third-party runtime logs showing `V4L2_CID_EXT_CAPTURE_PLANE_PROP` on `video60`.
+
+Therefore the high-FPS pipeline is no longer ambiguous at the driver-API level. The unresolved part is access to the dedicated 81:6 VT capture node from official Developer Mode.
