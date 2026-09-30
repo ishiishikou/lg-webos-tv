@@ -65,14 +65,17 @@ jobs:
 
       - name: Extract EPK and rootfs
         id: extract
-        continue-on-error: true
         run: |
           set -o pipefail
           EPK="$(cat work/epk-path.txt)"
-          BIN="$(find work/epk2extract -type f -name epk2extract -perm -111 -print -quit)"
-          BIN="$(realpath "$BIN")"
+          # build.sh installs AES.key and the platform PEM files next to this
+          # top-level binary. Do not accidentally select build_linux/obj/src/
+          # epk2extract, which has no adjacent key files.
+          BIN="$(realpath work/epk2extract/build_linux/epk2extract)"
+          test -x "$BIN"
+          test -f "$(dirname "$BIN")/AES.key"
+          test -f "$(dirname "$BIN")/o20.pem"
           mkdir -p work/extract
-          cp work/epk2extract/keys/* work/extract/ || true
           cp "$EPK" work/extract/firmware.epk
 
           (
@@ -80,6 +83,11 @@ jobs:
             echo "# EPK extraction"
             fakeroot "$BIN" firmware.epk
           ) 2>&1 | tee work/report/epk-extract.log
+
+          if grep -Eq 'Cannot decrypt EPK|proper AES key is missing|Cannot open key file' work/report/epk-extract.log; then
+            echo "EPK decryption failed" >&2
+            exit 1
+          fi
 
           ROOTFS="$(find work/extract -type f -name 'rootfs.pak' -print -quit)"
           if [ -n "$ROOTFS" ] && ! find work/extract -type d -name 'rootfs.pak.unsquashfs' -print -quit | grep -q .; then
