@@ -243,6 +243,78 @@ jobs:
 
           cat "$REPORT"
 
+      - name: Analyze PVR SDEC TE transport stack
+        if: always()
+        run: |
+          REPORT=work/report/ts-stack-analysis.txt
+          {
+            echo "# PVR / SDEC / TE transport-stack analysis"
+            echo
+            echo "## Candidate libraries and device-facing components"
+            find work/extract -type f \( \
+              -name 'libkbl-te.so*' -o \
+              -name 'libdvr.so*' -o \
+              -name 'libelement-demux-aribuhd.so*' -o \
+              -iname '*delivery*.so*' -o \
+              -iname '*sdec*.so*' -o \
+              -iname '*pvr*.so*' -o \
+              -iname '*transport*.so*' \
+            \) -print 2>/dev/null | sort | head -1000
+
+            TE="$(find work/extract -type f -name 'libkbl-te.so.2.0.1' -print -quit 2>/dev/null || true)"
+            DEMUX="$(find work/extract -type f -name 'libelement-demux-aribuhd.so.1.0.0' -print -quit 2>/dev/null || true)"
+            DVR="$(find work/extract -type f -name 'libdvr.so.1.0.1' -print -quit 2>/dev/null || true)"
+
+            for f in "$TE" "$DEMUX" "$DVR"; do
+              [ -n "$f" ] || continue
+              echo
+              echo "===== $f ====="
+              file "$f" || true
+              sha256sum "$f" || true
+              echo "-- dynamic dependencies --"
+              readelf -d "$f" 2>/dev/null | grep -E 'NEEDED|RPATH|RUNPATH' || true
+              echo "-- relevant symbols --"
+              readelf -Ws "$f" 2>/dev/null | grep -Ei \
+                'openChannel|closeChannel|DELIVERY|PVR|SDEC|TE_|TS_|Demux|FilterDriver|AddWatch|Buffer|mmap|ioctl|read|write|download|upload|record' \
+                | head -3000 || true
+              echo "-- relevant strings --"
+              strings -a -t x "$f" | grep -Ei \
+                '/dev/|pvr|sdec|te[0-9]|delivery|open.?channel|close.?channel|TS channel|transport|download|upload|buffer|mmap|ioctl|filter|dump|record|fifo|socket' \
+                | head -3000 || true
+            done
+
+            if [ -n "$DEMUX" ]; then
+              echo
+              echo "## Targeted DemuxAribUhd / uFilterDriver disassembly"
+              OBJDUMP="$(command -v arm-linux-gnueabihf-objdump || command -v objdump)"
+              for pattern in \
+                'uFilterDriver.*openChannel' \
+                'uFilterDriver.*closeChannel' \
+                'DemuxAribUhd.*Open' \
+                'DemuxAribUhd.*Start' \
+                'DemuxAribUhd.*AddWatch'; do
+                echo
+                echo "===== symbol pattern: $pattern ====="
+                readelf -Ws "$DEMUX" 2>/dev/null | grep -E "$pattern" | head -20 || true
+                while read -r line; do
+                  [ -n "$line" ] || continue
+                  value="$(awk '{print $2}' <<<"$line")"
+                  size="$(awk '{print $3}' <<<"$line")"
+                  name="$(awk '{print $8}' <<<"$line")"
+                  case "$value:$size" in
+                    *[!0-9A-Fa-f:]*|'':*|*:0) continue ;;
+                  esac
+                  start=$(( (16#$value) & ~1 ))
+                  stop=$(( start + size ))
+                  echo "--- $name start=$(printf '0x%x' "$start") size=$size ---"
+                  "$OBJDUMP" -d -C --start-address="$start" --stop-address="$stop" "$DEMUX" 2>/dev/null || true
+                done < <(readelf -Ws "$DEMUX" 2>/dev/null | grep -E "$pattern" | head -20 || true)
+              done
+            fi
+          } > "$REPORT" 2>&1
+
+          cat "$REPORT"
+
       - name: Upload text reports
         if: always()
         uses: actions/upload-artifact@v4
