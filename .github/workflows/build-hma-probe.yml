@@ -1,0 +1,49 @@
+name: Build HMA probe
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "native/hma-probe/**"
+      - ".github/workflows/build-hma-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ARM soft-float binary against glibc 2.27
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            ubuntu:18.04 \
+            bash -lc '
+              set -eux
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi \
+                libc6-dev-armel-cross file ca-certificates
+              mkdir -p dist/bin
+              arm-linux-gnueabi-gcc \
+                -std=gnu11 -O2 -Wall -Wextra \
+                -march=armv7-a -mthumb -mfloat-abi=soft \
+                -o dist/bin/hma-probe \
+                native/hma-probe/hma-probe.c \
+                -ldl
+              cp native/hma-probe/appinfo.json dist/appinfo.json
+              printf "%s" "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZzQsAAAAASUVORK5CYII=" | base64 -d > dist/icon.png
+              file dist/bin/hma-probe
+              arm-linux-gnueabi-readelf -V dist/bin/hma-probe | grep -o "GLIBC_[0-9.]*" | sort -Vu
+            '
+
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: hma-probe-app
+          path: dist/
+          retention-days: 7
