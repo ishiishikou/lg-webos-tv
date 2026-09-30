@@ -142,6 +142,67 @@ jobs:
 
           cat "$REPORT"
 
+      - name: Analyze capture-service output paths
+        if: always()
+        run: |
+          REPORT=work/report/capture-service-analysis.txt
+          {
+            echo "# Capture service static analysis"
+            echo
+            echo "## Candidate files"
+            find work/extract -type f \( -name 'captureservice' -o -name '*capture*service*' -o -name 'libvtcapture.so*' \) -print 2>/dev/null | sort
+
+            CAPTURE="$(find work/extract -type f -name captureservice -print -quit 2>/dev/null || true)"
+            if [ -z "$CAPTURE" ]; then
+              echo
+              echo "captureservice executable not found in extracted output."
+              exit 0
+            fi
+
+            echo
+            echo "## captureservice metadata"
+            file "$CAPTURE" || true
+            sha256sum "$CAPTURE" || true
+
+            echo
+            echo "## dynamic dependencies"
+            readelf -d "$CAPTURE" 2>/dev/null | grep -E 'NEEDED|RPATH|RUNPATH' || true
+
+            echo
+            echo "## exported/imported capture symbols"
+            readelf -Ws "$CAPTURE" 2>/dev/null | grep -Ei \
+              'setOutput|executeOneShot|execute|createHandle|destroyHandle|setProperties|setOptions|shared|buffer|memory|socket|stream|file|jpeg|png|bmp|rgb|yuv|vtcapture' \
+              | head -2000 || true
+
+            echo
+            echo "## setOutput / destination-related strings"
+            strings -a -t x "$CAPTURE" | grep -Ei \
+              'setOutput|output.*(file|path|buffer|memory|shared|socket|stream)|destination|shared.?memory|memfd|shm|socket|pipe|fd|file|path|URI|jpeg|jpg|png|bmp|rgb|rgba|yuv|raw' \
+              | head -3000 || true
+
+            echo
+            echo "## method and JSON-key candidates"
+            strings -a "$CAPTURE" | grep -Ei \
+              'createHandle|destroyHandle|getCapability|getProperties|setProperties|getOptions|setOptions|getOutput|setOutput|executeOneShot|execute|handle|properties|options|output|file|path|format|method|width|height|quality|buffer|memory|shared|socket|stream' \
+              | sort -u | head -3000 || true
+
+            echo
+            echo "## all short JSON-like keys"
+            strings -a "$CAPTURE" | grep -E '^[A-Za-z][A-Za-z0-9_.-]{1,40}        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cx-firmware-acr-analysis
+          path: work/report/
+          if-no-files-found: warn
+          retention-days: 7
+ \
+              | sort -u | grep -Ei \
+              'capture|output|file|path|format|method|handle|option|property|width|height|quality|buffer|memory|shared|socket|stream|raw|image|video|jpeg|jpg|png|bmp|rgb|yuv' \
+              | head -3000 || true
+          } > "$REPORT" 2>&1
+
+          cat "$REPORT"
+
       - name: Upload text reports
         if: always()
         uses: actions/upload-artifact@v4
