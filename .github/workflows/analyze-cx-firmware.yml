@@ -211,14 +211,27 @@ jobs:
             OBJDUMP="$(command -v arm-linux-gnueabihf-objdump || command -v objdump)"
             echo "objdump=$OBJDUMP"
 
-            for symbol in \
-              '_ZN17CaptureProperties16processSetOutputEP8LSHandleP9LSMessagePv' \
-              '_ZN17CaptureProperties15setClientOutputERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEES7_S7_j' \
-              '_ZN17ScreenCaptureCore14processExecuteEPjS0_S0_' \
-              '_ZN15ImageProcessing6encodeE15CaptureFormat_TPhRjjjj12ColorSpace_TP8_IO_FILE'; do
+            for pattern in \
+              'processSetOutput' \
+              'setClientOutput' \
+              'processExecuteEPj' \
+              'ImageProcessing6encode'; do
               echo
-              echo "===== $symbol ====="
-              "$OBJDUMP" -d -C --disassemble="$symbol" "$CAPTURE" 2>/dev/null || true
+              echo "===== symbol pattern: $pattern ====="
+              line="$(readelf -Ws "$CAPTURE" 2>/dev/null | grep "$pattern" | head -1 || true)"
+              echo "$line"
+              if [ -z "$line" ]; then
+                echo "symbol not found"
+                continue
+              fi
+              value="$(awk '{print $2}' <<<"$line")"
+              size="$(awk '{print $3}' <<<"$line")"
+              start=$(( (16#$value) & ~1 ))
+              stop=$(( start + size ))
+              printf 'start=0x%x stop=0x%x size=%s\n' "$start" "$stop" "$size"
+              "$OBJDUMP" -d -C \
+                --start-address="$start" --stop-address="$stop" \
+                "$CAPTURE" 2>/dev/null || true
             done
 
             echo
