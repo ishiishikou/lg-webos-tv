@@ -1,0 +1,144 @@
+name: Analyze LG CX 04.64.00 firmware
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/analyze-cx-firmware.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      # Official LG 04.64.00 package for the same 2020 O20 / jhericurl generation.
+      # This download is from LG's support CDN. It is not the JP PJA package, so
+      # all findings must be treated as same-generation evidence until confirmed
+      # on OLED65CXPJA.
+      FW_URL: https://gscs-b2c.lge.com/downloadFile?fileId=Y4IONzJGIHWYuTO4uhPVZA
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install extraction dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y             build-essential cmake liblzo2-dev libssl-dev libc6-dev zlib1g-dev             fakeroot squashfs-tools unzip binutils file
+
+      - name: Download official LG firmware
+        run: |
+          mkdir -p work/report
+          curl --fail --location --retry 3 --retry-delay 5             --output work/firmware.zip "$FW_URL"
+          {
+            echo "# Firmware download"
+            date -u
+            ls -lh work/firmware.zip
+            sha256sum work/firmware.zip
+          } | tee work/report/download.txt
+
+      - name: Inspect and unpack firmware ZIP
+        run: |
+          {
+            echo "# ZIP listing"
+            unzip -l work/firmware.zip
+          } | tee work/report/zip-listing.txt
+          mkdir -p work/zip
+          unzip -q work/firmware.zip -d work/zip
+          find work/zip -maxdepth 3 -type f -printf '%p\t%s bytes\n'             | tee work/report/unpacked-files.txt
+          EPK="$(find work/zip -type f -iname '*.epk' -print -quit)"
+          if [ -z "$EPK" ]; then
+            echo "No .epk found" | tee work/report/error.txt
+            exit 1
+          fi
+          echo "$EPK" | tee work/epk-path.txt
+
+      - name: Build epk2extract
+        run: |
+          git clone --depth 1 https://github.com/openlgtv/epk2extract.git work/epk2extract
+          cd work/epk2extract
+          CMAKE_FLAGS=-DCMAKE_BUILD_TYPE=Test ./build.sh
+          find . -type f -name epk2extract -perm -111 -print             | tee ../report/epk2extract-binaries.txt
+
+      - name: Extract EPK and rootfs
+        id: extract
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          EPK="$(cat work/epk-path.txt)"
+          BIN="$(find work/epk2extract -type f -name epk2extract -perm -111 -print -quit)"
+          BIN="$(realpath "$BIN")"
+          mkdir -p work/extract
+          cp work/epk2extract/keys/* work/extract/ || true
+          cp "$EPK" work/extract/firmware.epk
+
+          (
+            cd work/extract
+            echo "# EPK extraction"
+            fakeroot "$BIN" firmware.epk
+          ) 2>&1 | tee work/report/epk-extract.log
+
+          ROOTFS="$(find work/extract -type f -name 'rootfs.pak' -print -quit)"
+          if [ -n "$ROOTFS" ] && ! find work/extract -type d -name 'rootfs.pak.unsquashfs' -print -quit | grep -q .; then
+            ROOTDIR="$(dirname "$ROOTFS")"
+            ROOTBASE="$(basename "$ROOTFS")"
+            (
+              cd "$ROOTDIR"
+              echo "# Explicit rootfs extraction"
+              fakeroot "$BIN" "$ROOTBASE"
+            ) 2>&1 | tee -a "$(realpath work/report/epk-extract.log)"
+          fi
+
+          {
+            echo "# Extracted top-level files"
+            find work/extract -maxdepth 4 -type f -printf '%p\t%s bytes\n' | head -500
+          } > work/report/extracted-files.txt
+
+      - name: Analyze ACR capture components
+        if: always()
+        run: |
+          REPORT=work/report/acr-analysis.txt
+          {
+            echo "# ACR / capture component analysis"
+            echo
+            echo "## Candidate files"
+            find work/extract -type f \(               -name 'acr2' -o               -name 'adoverlay-service' -o               -name 'libvtcapture.so*' -o               -name 'libalphonsosolution.so*' -o               -name 'libalphonsoadoverlay.so*' -o               -name 'libsambasolution.so*' -o               -name 'libnielsensolution.so*'             \) -print 2>/dev/null | sort
+
+            ACR="$(find work/extract -type f -name acr2 -print -quit 2>/dev/null || true)"
+            if [ -z "$ACR" ]; then
+              echo
+              echo "acr2 executable not found in extracted output."
+              exit 0
+            fi
+
+            echo
+            echo "## acr2 file metadata"
+            file "$ACR" || true
+            sha256sum "$ACR" || true
+
+            echo
+            echo "## acr2 dynamic dependencies"
+            readelf -d "$ACR" 2>/dev/null | grep -E 'NEEDED|RPATH|RUNPATH' || true
+
+            echo
+            echo "## acr2 capture-related strings"
+            strings -a "$ACR" | grep -Ei               'libvtcapture|vtcapture|DaiFastCapture|VideoCapture|ImageConverter|CaptureBuff|CaptureDelegate|capture_method|capture_format|video.?capture|getVideoCaptureStatus|getCaptureCondition|getCaptureSpeed|setCaptureSpeed|com\.webos\.service\.capture|capture\.client|CAPTURE_LOCATION|AcquireVt|CreateContext|video60'               | sort -u | head -1000 || true
+
+            echo
+            echo "## acr2 Luna-related strings"
+            strings -a "$ACR" | grep -E               'com\.webos\.service\.acr|luna://com\.webos\.service\.acr|startAcr|getACR|getVideoCaptureStatus|getAudioCaptureStatus|getCapture'               | sort -u | head -1000 || true
+          } > "$REPORT" 2>&1
+
+          cat "$REPORT"
+
+      - name: Upload text reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cx-firmware-acr-analysis
+          path: work/report/
+          if-no-files-found: warn
+          retention-days: 7
