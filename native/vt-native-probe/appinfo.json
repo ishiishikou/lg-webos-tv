@@ -1,9 +1,11 @@
 {
   "id": "com.local.vtnativeprobe",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "vendor": "Local Probe",
   "type": "native",
   "main": "bin/vt-native-probe",
   "title": "VT Native Probe",
-  "visible": true
+  "icon": "icon.png",
+  "visible": true,
+  "requiredACG": []
 }
