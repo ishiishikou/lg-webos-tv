@@ -1,0 +1,11 @@
+{
+  "id": "com.local.vtpluginprobe",
+  "version": "1.0.0",
+  "vendor": "Local Probe",
+  "type": "qml",
+  "main": "main.qml",
+  "title": "VT Plugin Probe",
+  "icon": "icon.png",
+  "visible": true,
+  "requiredACG": []
+}
