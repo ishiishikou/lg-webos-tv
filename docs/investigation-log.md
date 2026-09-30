@@ -164,3 +164,34 @@ Recording from `MixerCapture` succeeds as `prisoner`.
 A 2-second recording made while the TV output was temporarily muted still contained a strong, nearly continuous PCM signal. The TV mute state was then restored. This strongly suggests that `MixerCapture` taps an internal pre-mute/pre-volume mix rather than microphone/speaker-acoustic feedback.
 
 The next validation is to prove that this PCM tracks the current DTV/recording program audio.
+
+
+### Program-audio validation and transport
+
+A source-switch A/B test strengthened the `MixerCapture` identification:
+
+```text
+Live TV active:
+  MixerCapture S32_LE stereo RMS: ~61.9M / ~61.9M
+
+Developer Mode app foreground:
+  MixerCapture RMS: 0 / 0
+```
+
+After the test, Live TV and the original channel were restored.
+
+This indicates that `hw:1,2 (MixerCapture)` follows active media playback and is a practical decoded-program-audio tap.
+
+A real-time transport probe also worked without root:
+
+```sh
+arecord -q -D hw:1,2 -f S32_LE -c 2 -r 48000 -t raw | base64
+```
+
+When run remotely through `ares-novacom`, base64 output streamed incrementally rather than only at process exit. Measured on the current setup:
+
+- first PCM data: about 545 ms after startup
+- sustained transport: approximately real-time
+- 5 seconds: expected 1,920,000 bytes of decoded S32_LE stereo PCM
+
+This makes audio substantially more promising than the current JPEG video path under official Developer Mode.
