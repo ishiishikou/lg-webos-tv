@@ -33,7 +33,8 @@ int main(void) {
     const char *report = "/tmp/vt_native_probe.log";
     FILE *log = fopen(report, "w");
     if (!log) return 2;
-    setvbuf(log, NULL, _IONBF, 0);\n    fprintf(log, "uid=%d euid=%d gid=%d\\n", getuid(), geteuid(), getgid());
+    setvbuf(log, NULL, _IONBF, 0);
+    fprintf(log, "uid=%d euid=%d gid=%d\n", getuid(), geteuid(), getgid());
 
     void *lib = dlopen("/usr/lib/libvt.so.1", RTLD_NOW | RTLD_LOCAL);
     if (!lib) {
