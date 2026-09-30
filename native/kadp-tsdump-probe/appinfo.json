@@ -1,0 +1,11 @@
+{
+  "id": "com.local.kadptsdumpprobe",
+  "version": "1.0.0",
+  "vendor": "Local Probe",
+  "type": "native",
+  "main": "bin/kadp-tsdump-probe",
+  "title": "KADP TS Dump Probe",
+  "icon": "icon.png",
+  "visible": true,
+  "requiredACG": []
+}
