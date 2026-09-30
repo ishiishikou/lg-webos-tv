@@ -1,0 +1,34 @@
+# Local credentials / pairing material
+.env
+.env.*
+*client-key*
+*private-key*
+*.pem
+*.key
+known_hosts
+
+# Captured media (do not publish program content by default)
+captures/
+artifacts/
+*.wav
+*.pcm
+*.s32le
+*.raw
+*.ts
+*.str
+*.STR
+*.jpg
+*.jpeg
+*.png
+
+# Device dumps / local reverse-engineering binaries
+dumps/
+device-files/
+*.so
+*.bin
+
+# Local tooling
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
