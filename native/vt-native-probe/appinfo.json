@@ -1,6 +1,6 @@
 {
   "id": "com.local.vtnativeprobe",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "vendor": "Local Probe",
   "type": "native",
   "main": "bin/vt-native-probe",
