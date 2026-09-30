@@ -315,6 +315,197 @@ jobs:
 
           cat "$REPORT"
 
+      - name: Trace TS consumers device access and IPC
+        if: always()
+        run: |
+          REPORT=work/report/ts-consumer-trace.txt
+          python3 - <<'PY' > "$REPORT" 2>&1
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          ROOT = Path("work/extract")
+          TARGETS = (
+              "libkbl-te.so",
+              "libelement-demux-aribuhd.so",
+              "libdvr.so",
+          )
+
+          def run(args, timeout=20):
+              try:
+                  return subprocess.run(
+                      args,
+                      stdout=subprocess.PIPE,
+                      stderr=subprocess.DEVNULL,
+                      text=True,
+                      timeout=timeout,
+                      check=False,
+                  ).stdout
+              except Exception:
+                  return ""
+
+          def is_elf(path):
+              try:
+                  with open(path, "rb") as fh:
+                      return fh.read(4) == b"\x7fELF"
+              except Exception:
+                  return False
+
+          def needed(path):
+              out = run(["readelf", "-d", str(path)])
+              return re.findall(r"Shared library: \[([^\]]+)\]", out)
+
+          def dynsyms(path):
+              return run(["readelf", "-Ws", str(path)])
+
+          def strings(path):
+              return run(["strings", "-a", "-t", "x", str(path)], timeout=30)
+
+          print("# TS consumer / device-access / IPC static trace")
+          print()
+          print("Same-generation W20O firmware only; confirm device-specific findings later on JP firmware/runtime.")
+          print()
+
+          elfs = [p for p in ROOT.rglob("*") if p.is_file() and is_elf(p)]
+          print(f"ELF files scanned: {len(elfs)}")
+
+          consumers = []
+          for p in elfs:
+              libs = needed(p)
+              if any(any(t in lib for t in TARGETS) for lib in libs):
+                  consumers.append((p, libs))
+
+          print()
+          print("## Reverse dependencies")
+          if not consumers:
+              print("No direct dynamic consumers found.")
+          for p, libs in consumers:
+              print()
+              print(f"### {p}")
+              print("NEEDED:")
+              for lib in libs:
+                  print(f"  {lib}")
+
+          interesting = []
+          for p, _ in consumers:
+              interesting.append(p)
+          for needle in ("libkbl-te.so.2.0.1", "libelement-demux-aribuhd.so.1.0.0", "libdvr.so.1.0.1"):
+              q = next(iter(ROOT.rglob(needle)), None)
+              if q is not None:
+                  interesting.append(q)
+
+          seen = set()
+          interesting = [p for p in interesting if not (str(p) in seen or seen.add(str(p)))]
+
+          access_re = re.compile(
+              r"\b(open|open64|openat|ioctl|mmap|mmap2|munmap|read|pread|write|poll|ppoll|select|epoll|eventfd|socket|connect|recv|send|shm_open)\b",
+              re.I,
+          )
+          string_re = re.compile(
+              r"(/dev/|/tmp/|/var/run/|/run/|luna://|com\.webos\.|socket|fifo|pipe|shared.?memory|shm|mmap|ioctl|"
+              r"pvr|sdec|transport|demux|delivery|TS channel|PES|MMTP|ARIB|filter|buffer|callback)",
+              re.I,
+          )
+
+          print()
+          print("## Device/API imports and IPC strings")
+          for p in interesting:
+              print()
+              print(f"### {p}")
+              syms = dynsyms(p)
+              imports = []
+              for line in syms.splitlines():
+                  if " UND " in line and access_re.search(line):
+                      imports.append(line.strip())
+              print("-- imported device/IPC primitives --")
+              if imports:
+                  for line in imports[:300]:
+                      print(line)
+              else:
+                  print("(none matched)")
+
+              print("-- relevant strings --")
+              matched = [line for line in strings(p).splitlines() if string_re.search(line)]
+              for line in matched[:1200]:
+                  print(line)
+
+          print()
+          print("## PLT call-site context")
+          for p in interesting:
+              dis = run(["arm-linux-gnueabihf-objdump", "-d", "-C", str(p)], timeout=60)
+              lines = dis.splitlines()
+              hits = []
+              for idx, line in enumerate(lines):
+                  if re.search(r"<(?:open|open64|openat|ioctl|mmap|mmap2|read|poll|select|epoll|socket|connect|shm_open)@plt>", line):
+                      lo=max(0, idx-5)
+                      hi=min(len(lines), idx+7)
+                      hits.append("\n".join(lines[lo:hi]))
+              if hits:
+                  print()
+                  print(f"### {p}")
+                  for block in hits[:160]:
+                      print(block)
+                      print("---")
+
+          print()
+          print("## Firmware metadata references to consumer basenames")
+          names = sorted({p.name for p, _ in consumers})
+          metadata_roots = [
+              ROOT / "04.64.00.01-HE_DTV_W20O_AFABATAA" / "rootfs.pak.unsquashfs" / "usr" / "share" / "ls2",
+              ROOT / "04.64.00.01-HE_DTV_W20O_AFABATAA" / "rootfs.pak.unsquashfs" / "etc",
+              ROOT / "04.64.00.01-HE_DTV_W20O_AFABATAA" / "rootfs.pak.unsquashfs" / "usr" / "share",
+          ]
+          text_ext = {".json", ".conf", ".service", ".sh", ".xml", ".ini", ".role", ".perm"}
+          for base in metadata_roots:
+              if not base.exists():
+                  continue
+              for p in base.rglob("*"):
+                  if not p.is_file() or p.suffix.lower() not in text_ext:
+                      continue
+                  try:
+                      data=p.read_text(errors="ignore")
+                  except Exception:
+                      continue
+                  if any(name in data for name in names):
+                      print()
+                      print(f"### {p}")
+                      for line in data.splitlines():
+                          if any(name in line for name in names):
+                              print(line[:2000])
+          PY
+
+          cat "$REPORT"
+
+      - name: Build TS static evidence index
+        if: always()
+        run: |
+          REPORT=work/report/ts-evidence-index.txt
+          {
+            echo "# TS static evidence index"
+            echo
+            echo "## All transport-related device path literals"
+            find work/extract -type f -size -20M -print0 2>/dev/null \
+              | xargs -0 -r strings -a 2>/dev/null \
+              | grep -E '^/dev/|/dev/(lg/)?(pvr|sdec|te|demod|delivery|ts)' \
+              | sort -u | head -3000 || true
+
+            echo
+            echo "## LS2 / local IPC names around broadcast, demux, DVR and transport"
+            find work/extract -type f -size -20M -print0 2>/dev/null \
+              | xargs -0 -r strings -a 2>/dev/null \
+              | grep -Ei '^(luna://|com\.webos\.)|broadcast|demux|transport|delivery|dvr|pvr|sdec|timeshift|record' \
+              | sort -u | head -5000 || true
+
+            echo
+            echo "## ARIB/Japan-oriented demux candidates"
+            find work/extract -type f \
+              | grep -Ei 'arib|mmt|mmtp|demux|broadcast|delivery|tuner|frontend' \
+              | sort | head -3000 || true
+          } > "$REPORT" 2>&1
+
+          cat "$REPORT"
+
       - name: Upload text reports
         if: always()
         uses: actions/upload-artifact@v4
