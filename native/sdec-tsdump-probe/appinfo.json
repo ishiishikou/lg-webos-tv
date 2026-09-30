@@ -1,0 +1,11 @@
+{
+  "id": "com.local.sdectsdumpprobe",
+  "version": "1.0.0",
+  "vendor": "local",
+  "type": "native",
+  "main": "bin/sdec-tsdump-probe",
+  "title": "SDEC TS Dump Probe",
+  "icon": "icon.png",
+  "visible": false,
+  "requiredACG": []
+}
