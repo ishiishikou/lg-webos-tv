@@ -17,24 +17,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install ARM soft-float cross toolchain
+      - name: Build ARM soft-float binary against glibc 2.27
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi libc6-dev-armel-cross file
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            ubuntu:18.04 \
+            bash -lc '
+              set -eux
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi \
+                libc6-dev-armel-cross file ca-certificates
+              mkdir -p dist/bin
+              arm-linux-gnueabi-gcc \
+                -std=gnu11 -O2 -Wall -Wextra \
+                -march=armv7-a -mthumb -mfloat-abi=soft \
+                -o dist/bin/vt-native-probe \
+                native/vt-native-probe/vt-native-probe.c \
+                -ldl
+              cp native/vt-native-probe/appinfo.json dist/appinfo.json
+              printf "%s" "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZzQsAAAAASUVORK5CYII=" | base64 -d > dist/icon.png
+              file dist/bin/vt-native-probe
+              arm-linux-gnueabi-readelf -h dist/bin/vt-native-probe
+              arm-linux-gnueabi-readelf -l dist/bin/vt-native-probe | grep -E "interpreter|Requesting"
+              arm-linux-gnueabi-readelf -V dist/bin/vt-native-probe | grep -o "GLIBC_[0-9.]*" | sort -Vu
+            '
 
-      - name: Build probe
+      - name: Verify TV compatibility target
         run: |
-          mkdir -p dist/bin
-          arm-linux-gnueabi-gcc \
-            -std=gnu11 -O2 -Wall -Wextra \
-            -march=armv7-a -mthumb -mfloat-abi=soft \
-            -o dist/bin/vt-native-probe \
-            native/vt-native-probe/vt-native-probe.c \
-            -ldl
-          cp native/vt-native-probe/appinfo.json dist/appinfo.json
-          file dist/bin/vt-native-probe
-          arm-linux-gnueabi-readelf -h dist/bin/vt-native-probe
-          arm-linux-gnueabi-readelf -l dist/bin/vt-native-probe | grep -E 'interpreter|Requesting'
+          MAX_GLIBC="$(readelf -V dist/bin/vt-native-probe | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1)"
+          echo "max required glibc: $MAX_GLIBC"
+          test "$MAX_GLIBC" != "GLIBC_2.34"
 
       - name: Upload app bundle
         uses: actions/upload-artifact@v4
