@@ -36,7 +36,114 @@ The executable itself is hidden from the Developer Mode filesystem view, but rel
 /usr/lib/libshopping.so.1.0.0
 ```
 
-## New cross-version static evidence
+## Same-generation firmware confirmation: 04.64.00 / W20O
+
+A GitHub Actions one-shot analysis extracted the official LG 04.64.00 package for the 2020 OLED W20O platform:
+
+```text
+04.64.00.01-HE_DTV_W20O_AFABATAA
+```
+
+This is the same W20O / webOS 5 generation as the target OLED65CXPJA, but it is the `AFABATAA` regional build rather than the target TV's `AFABJAAA` build. Treat it as very strong same-platform evidence, not a byte-identical dump of the Japanese TV.
+
+The extracted rootfs contains all of:
+
+```text
+/usr/sbin/acr2
+/usr/sbin/adoverlay-service
+/usr/lib/libvtcapture.so.1.0.0
+/usr/lib/libalphonsosolution.so.1.0.0
+/usr/lib/libalphonsoadoverlay.so.1.0.0
+```
+
+Most importantly, `readelf -d /usr/sbin/acr2` contains:
+
+```text
+NEEDED  libvtcapture.so.1
+```
+
+So on the same 2020 W20O generation, ACR does **not** need to obtain its continuous video path through the slow one-shot `com.webos.service.capture` API. It links the lower-level VT capture library directly.
+
+The same `acr2` binary contains the continuous capture path end-to-end:
+
+```text
+capture::VideoCapture::Start()
+capture::VideoCapture::ThreadMainFunc()
+capture::VideoCapture::ReportCaptureResult(...)
+capture::VTCaptureWrapper::GetBuffer(...)
+capture::VTCaptureWrapper::VTProcess()
+core::Controller::OnVideoCaptured(...)
+core::SolutionLoader::SendVideoFrame(capture::VideoCaptureBuffer const&, ...)
+```
+
+and imports / references the low-level VT API:
+
+```text
+vtCapture_createEx
+vtCapture_init
+vtCapture_preprocess
+vtCapture_process
+vtCapture_currentCaptureBuffInfo
+vtCapture_planeInfo
+vtCapture_postprocess
+vtCapture_release
+vtCapture_stop
+vtCapture_finalize
+```
+
+The binary also logs an actual FPS counter and starts capture with an explicit FPS parameter:
+
+```text
+[VideoCapture] FPS = %d
+msg:start video capture/width:%d/height:%d/fps:%d/progressive:%d
+msg:restart video capture/width:%d/height:%d/fps:%d/progressive:%d
+```
+
+This is the strongest evidence so far that the high-FPS route already reverse-engineered around `libvtcapture` is also the route used by LG's own ACR implementation on the CX generation.
+
+### Internal dump / one-shot support exists, but no external raw-frame API is proven
+
+The same binary contains internal methods:
+
+```text
+Capture::VideoCaptureDump(...)
+Capture::VideoCaptureOneShot(...)
+VideoCapture::SetCaptureDump(...)
+VideoCapture::SetCaptureOneShot(...)
+VTCaptureWrapper::SetCaptureDump(...)
+VTCaptureWrapper::SetCaptureOneShot(...)
+```
+
+However, corresponding raw-frame/dump methods were **not** found as obvious Luna method-name strings in this W20O `acr2`. Confirmed read-style Luna strings include:
+
+```text
+getACRstatus
+getACRAppStatus
+getACRLaunchFlag
+getACRSolutionStatus
+getAudioCaptureStatus
+getVideoCaptureStatus
+getCaptureSpeed
+```
+
+Therefore the current model is:
+
+- ACR definitely has a continuous VT capture buffer inside the root-owned process on the same W20O generation.
+- ACR definitely passes captured video buffers into the selected solution plugin.
+- An externally callable ACR method that returns those raw frames is **not** established.
+- Reusing ACR now means looking for a legitimate shared-buffer/IPC/export path, not assuming the Luna API returns images.
+
+### Capture policy is explicit
+
+The W20O binary contains detailed reasons that disable video capture, including recording, timeshift, scrambled/protected content, unsupported inputs/resolutions, blocked channels, multiview, store mode, and already-running capture.
+
+That means any live test must distinguish:
+
+1. capture implementation availability;
+2. current policy eligibility; and
+3. whether video capture is enabled by the downloaded ACR configuration.
+
+## Supporting cross-version static evidence
 
 ### 1. The solution-plugin interface can receive video frames
 
@@ -81,7 +188,7 @@ capture::CaptureDelegate
 DaiFastCapture
 ```
 
-This is consistent with the already-reversed `libvtcapture` / `/dev/video60` high-FPS implementation on the CX, but does **not** prove that the CX generation uses the exact same linkage. That still needs a live `/proc/<acr2-pid>/maps` check.
+This independently matches the same-generation W20O firmware result above. A live `/proc/<acr2-pid>/maps` check is still useful to confirm the Japanese `AFABJAAA` runtime, but direct `libvtcapture` linkage is no longer only a newer-webOS hypothesis.
 
 ### 3. Video capture is configuration-dependent
 
@@ -121,16 +228,19 @@ getCurrentChannelInfo
 getProductVersion
 ```
 
-The particularly useful methods for Issue #7 are:
+For the W20O 04.64.00 binary, the particularly useful confirmed method-name strings are:
 
 ```text
 getVideoCaptureStatus
-getCaptureCondition
 getCaptureSpeed
 getACRSolutionStatus
+getAudioCaptureStatus
+getACRstatus
 ```
 
-Do **not** call state-changing methods such as `startAcr`, `setACRsetting`, `setCaptureSpeed`, `setVideoPig`, or consent-related setters during this investigation.
+`getCaptureCondition` appears in other reverse-engineering material but was not found in the W20O `acr2` string set collected here, so it should not be treated as confirmed on this generation.
+
+Do **not** call state-changing methods such as `startAcr`, `setACRsetting`, `setCaptureSpeed`, `setVideoPig`, or consent-related setters if present. The exact W20O string scan did not surface all of those setters; this investigation remains read-only.
 
 ## Important distinction: private one-shot capture is already reachable
 
@@ -153,8 +263,9 @@ Use the same proven local `palmbus` mechanism as the private capture benchmark a
 ```text
 luna://com.webos.service.acr/getACRSolutionStatus
 luna://com.webos.service.acr/getVideoCaptureStatus
-luna://com.webos.service.acr/getCaptureCondition
+luna://com.webos.service.acr/getAudioCaptureStatus
 luna://com.webos.service.acr/getCaptureSpeed
+luna://com.webos.service.acr/getACRstatus
 ```
 
 Record full return structure, but redact any identifiers if present.
@@ -244,13 +355,9 @@ acr2 capture/orchestration
         +--> recognition result / metadata
 ```
 
-What remains unproven on the CX is the exact left-hand edge:
+For the same W20O generation, the left-hand edge is now confirmed to include direct `libvtcapture` linkage and direct `vtCapture_*` calls inside `acr2`. What remains to confirm on the Japanese OLED65CXPJA runtime is whether its regional `AFABJAAA` build behaves identically and whether the root-owned process exposes any buffer/IPC object that an unprivileged Developer Mode process can legitimately consume.
 
-- private `com.webos.service.capture` continuous client,
-- direct `libvtcapture`,
-- or a generation-specific wrapper around the same VT driver.
-
-There is currently **no evidence of an officially exposed raw-frame or network-stream API** from ACR or Ad Overlay. The value of this branch is to identify a reusable local buffer/IPC path or a legitimate continuous capture interface, not to assume ACR itself is a viewer API.
+There is currently **no evidence of an officially exposed raw-frame or network-stream API** from ACR or Ad Overlay. The next useful branch is therefore the process boundary: file descriptors, shared memory, Unix sockets, and any exported client interface around the already-confirmed continuous VT buffer.
 
 ## Sources used for cross-version comparison
 
@@ -262,3 +369,21 @@ There is currently **no evidence of an officially exposed raw-frame or network-s
 - https://gathering.tweakers.net/forum/list_messages/2344542
 
 Cross-version evidence is supporting evidence only; OLED65CXPJA runtime observation remains authoritative for this repository.
+
+## Reproducible firmware analysis
+
+The repository contains:
+
+```text
+.github/workflows/analyze-cx-firmware.yml
+```
+
+Successful same-generation analysis run:
+
+```text
+GitHub Actions run 36675788393
+commit fbda7a39de50420abffe3cc52d5cbc55cfb02d61
+artifact cx-firmware-acr-analysis
+```
+
+Only text reports are uploaded; the LG firmware and extracted binaries are not published as artifacts.
