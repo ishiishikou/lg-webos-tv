@@ -1,0 +1,11 @@
+{
+  "id": "com.local.kadptpistatusprobe",
+  "version": "1.0.0",
+  "vendor": "Local Probe",
+  "type": "native",
+  "main": "bin/kadp-tpi-status-probe",
+  "title": "KADP TPI Status Probe",
+  "icon": "icon.png",
+  "visible": true,
+  "requiredACG": []
+}
