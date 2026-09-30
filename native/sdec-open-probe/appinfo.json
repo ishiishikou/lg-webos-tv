@@ -1,0 +1,11 @@
+{
+  "id": "com.local.sdecopenprobe",
+  "version": "1.0.0",
+  "vendor": "local",
+  "type": "native",
+  "main": "bin/sdec-open-probe",
+  "title": "SDEC Open Probe",
+  "icon": "icon.png",
+  "visible": false,
+  "requiredACG": []
+}
