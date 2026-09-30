@@ -1,0 +1,44 @@
+name: Build VT native probe
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "native/vt-native-probe/**"
+      - ".github/workflows/build-vt-native-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ARM soft-float cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi libc6-dev-armel-cross file
+
+      - name: Build probe
+        run: |
+          mkdir -p dist/bin
+          arm-linux-gnueabi-gcc \
+            -std=gnu11 -O2 -Wall -Wextra \
+            -march=armv7-a -mthumb -mfloat-abi=soft \
+            -o dist/bin/vt-native-probe \
+            native/vt-native-probe/vt-native-probe.c \
+            -ldl
+          cp native/vt-native-probe/appinfo.json dist/appinfo.json
+          file dist/bin/vt-native-probe
+          arm-linux-gnueabi-readelf -h dist/bin/vt-native-probe
+          arm-linux-gnueabi-readelf -l dist/bin/vt-native-probe | grep -E 'interpreter|Requesting'
+
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: vt-native-probe-app
+          path: dist/
+          retention-days: 7
