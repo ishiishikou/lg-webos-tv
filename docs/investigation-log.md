@@ -195,3 +195,38 @@ When run remotely through `ares-novacom`, base64 output streamed incrementally r
 - 5 seconds: expected 1,920,000 bytes of decoded S32_LE stereo PCM
 
 This makes audio substantially more promising than the current JPEG video path under official Developer Mode.
+
+
+### High-FPS path narrowing
+
+Additional official-Developer-Mode tests ruled out several candidate paths.
+
+#### Temporary Developer Mode service
+
+A minimal app/service was installed with `ares-install`, then removed after testing.
+
+Calls from the service returned:
+
+```text
+capture/getCapability     -> Denied method call
+capture/createHandle      -> Denied method call
+getTSPath                 -> Denied method call
+```
+
+The service sandbox had neither `/dev/video20` nor `/dev/video60`.
+
+#### Dedicated VT device is fully hidden
+
+Sysfs exposes the dedicated capture device as major 81/minor 6 (`vt-capture-dev`), but scanning the entire Developer Mode `/dev` tree found no node or alias with 81:6.
+
+#### HAL_GAL / libgm
+
+`/dev/gfx` is visible and can be opened by `prisoner`, but `HAL_GAL_Init()` segfaulted when called from the Developer Mode shell. `libgm.so` is absent on this model.
+
+#### Public screenshot path cannot be scaled
+
+Multiple concurrent SSAP `executeOneShot` calls do not generate independent frames. 2/4/8 concurrent calls returned one unique JPEG per batch and total latency increased with concurrency.
+
+SSAP format requests for JPG, PNG, RGB, and YUV422 all returned the same JPEG resource. The public API adapter therefore normalizes screenshot output rather than exposing raw capture buffers.
+
+This leaves the dedicated VT capture path as the main high-FPS route, but it remains behind both LS2 privilege and the hidden `/dev/video60` device boundary.
