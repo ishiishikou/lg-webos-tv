@@ -1,0 +1,11 @@
+{
+  "id": "com.local.kadpsdecprobe",
+  "version": "1.0.0",
+  "vendor": "Local Probe",
+  "type": "native",
+  "main": "bin/kadp-sdec-open-probe",
+  "title": "KADP SDEC Open Probe",
+  "icon": "icon.png",
+  "visible": true,
+  "requiredACG": []
+}
