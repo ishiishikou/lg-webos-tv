@@ -102,3 +102,65 @@ Do not commit:
 - MAC addresses
 - account credentials
 - raw files containing those values
+
+
+### getTSPath reverse engineering
+
+Static analysis of the TV's `libelement-frontend.so.1.0.0` corrected an earlier assumption about `getTSPath`.
+
+`AdapterFrontend::getDemodConfig()` builds a request containing `tunerNo`, calls:
+
+```text
+luna://com.webos.service.legacybroadcast.frontend/getTSPath
+```
+
+and parses numeric response fields:
+
+```text
+portType
+inputType
+demodType
+```
+
+Therefore `getTSPath` does **not** appear to return a filesystem path/FIFO containing MPEG-TS. It supplies transport-stream hardware routing/configuration metadata used by the frontend adapter.
+
+### vtCapture jail boundary
+
+`libvtcapture.so` contains a literal reference to:
+
+```text
+/dev/video60
+```
+
+Sysfs identifies major 81/minor 6 as:
+
+```text
+vt-capture-dev
+```
+
+The kernel device exists, but the Developer Mode jail does not expose `/dev/video60`. Only selected V4L2 nodes such as the ADC and VDEC nodes are visible. The `prisoner` process has no effective Linux capabilities.
+
+Direct `vtCapture_create()` and `vtCapture_createEx()` tests also fail during privileged Luna registration (`LSRegisterPubPriv FAILED`) before capture initialization.
+
+This gives two independent boundaries for the high-FPS decoded-video route:
+
+1. private/privileged Luna registration
+2. hidden V4L2 capture device
+
+### ALSA decoded-audio candidate
+
+The Developer Mode account belongs to the `audio` group and can open several ALSA capture PCMs.
+
+Most relevant:
+
+```text
+hw:1,2  MixerCapture      S32_LE, 2ch, 48000 Hz
+hw:1,1  SpeakerFeedback   S32_LE, 8ch, 48000 Hz
+hw:0,12 dsnoop capture    S16_LE, 2ch, 48000 Hz
+```
+
+Recording from `MixerCapture` succeeds as `prisoner`.
+
+A 2-second recording made while the TV output was temporarily muted still contained a strong, nearly continuous PCM signal. The TV mute state was then restored. This strongly suggests that `MixerCapture` taps an internal pre-mute/pre-volume mix rather than microphone/speaker-acoustic feedback.
+
+The next validation is to prove that this PCM tracks the current DTV/recording program audio.
