@@ -188,14 +188,7 @@ jobs:
 
             echo
             echo "## all short JSON-like keys"
-            strings -a "$CAPTURE" | grep -E '^[A-Za-z][A-Za-z0-9_.-]{1,40}        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cx-firmware-acr-analysis
-          path: work/report/
-          if-no-files-found: warn
-          retention-days: 7
- \
+            strings -a "$CAPTURE" | grep -E '^[A-Za-z][A-Za-z0-9_.-]{1,40}$' \
               | sort -u | grep -Ei \
               'capture|output|file|path|format|method|handle|option|property|width|height|quality|buffer|memory|shared|socket|stream|raw|image|video|jpeg|jpg|png|bmp|rgb|yuv' \
               | head -3000 || true
