@@ -1,0 +1,11 @@
+{
+  "id": "com.local.hmaprobe",
+  "version": "1.0.0",
+  "vendor": "local",
+  "type": "native",
+  "main": "bin/hma-probe",
+  "title": "HMA Probe",
+  "icon": "icon.png",
+  "visible": false,
+  "requiredPermissions": []
+}
