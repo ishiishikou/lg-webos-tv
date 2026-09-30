@@ -506,6 +506,116 @@ jobs:
 
           cat "$REPORT"
 
+      - name: Trace HAL DELIVERY implementation
+        if: always()
+        run: |
+          REPORT=work/report/hal-delivery-trace.txt
+          python3 - <<'PY' > "$REPORT" 2>&1
+          import re
+          import subprocess
+          from pathlib import Path
+
+          ROOT = Path("work/extract")
+
+          def run(args, timeout=30):
+              try:
+                  return subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                        text=True, timeout=timeout, check=False).stdout
+              except Exception:
+                  return ""
+
+          def is_elf(p):
+              try:
+                  return p.read_bytes()[:4] == b"\x7fELF"
+              except Exception:
+                  return False
+
+          elfs=[p for p in ROOT.rglob("*") if p.is_file() and is_elf(p)]
+          sym="HAL_DELIVERY_OpenChannel"
+
+          print("# HAL DELIVERY implementation trace")
+          print()
+          providers=[]
+          users=[]
+          for p in elfs:
+              ws=run(["readelf","-Ws",str(p)],timeout=10)
+              matched=[ln for ln in ws.splitlines() if sym in ln]
+              if not matched:
+                  continue
+              if any(" UND " in ln for ln in matched):
+                  users.append((p,matched))
+              if any(" UND " not in ln for ln in matched):
+                  providers.append((p,matched))
+
+          print("## Providers of HAL_DELIVERY_OpenChannel")
+          if not providers:
+              print("(none found)")
+          for p,matched in providers:
+              print()
+              print(f"### {p}")
+              for ln in matched:
+                  print(ln.strip())
+              print("-- NEEDED --")
+              print(run(["readelf","-d",str(p)]))
+              print("-- HAL_DELIVERY exports --")
+              for ln in run(["readelf","-Ws",str(p)]).splitlines():
+                  if "HAL_DELIVERY_" in ln:
+                      print(ln.strip())
+              print("-- transport/device strings --")
+              for ln in run(["strings","-a","-t","x",str(p)],timeout=20).splitlines():
+                  if re.search(r"/dev/|arib|mmt|atsc3|delivery|demod|te[0-9]|sdec|pvr|filter|buffer|ioctl|mmap|poll|read",ln,re.I):
+                      print(ln)
+
+          print()
+          print("## Consumers importing HAL_DELIVERY_OpenChannel")
+          for p,matched in users:
+              print()
+              print(f"### {p}")
+              for ln in matched:
+                  print(ln.strip())
+
+          print()
+          print("## nabs HAL_DELIVERY call sites")
+          nabs=next(iter(ROOT.rglob("nabs")),None)
+          if nabs and is_elf(nabs):
+              print(f"nabs={nabs}")
+              dis=run(["arm-linux-gnueabihf-objdump","-d","-C",str(nabs)],timeout=90)
+              lines=dis.splitlines()
+              methods=[
+                  "HAL_DELIVERY_Initialize","HAL_DELIVERY_OpenChannel","HAL_DELIVERY_RequestFilter",
+                  "HAL_DELIVERY_GetFilterMessage","HAL_DELIVERY_CopyFilterData",
+                  "HAL_DELIVERY_ReturnFilterData","HAL_DELIVERY_GetBBFrameBuffer",
+                  "HAL_DELIVERY_ReturnBBFrameBuffer","HAL_DELIVERY_CloseChannel"
+              ]
+              for meth in methods:
+                  print()
+                  print(f"### {meth}")
+                  hit=0
+                  for i,line in enumerate(lines):
+                      if f"<{meth}@plt>" in line and "bl" in line:
+                          hit += 1
+                          print("\n".join(lines[max(0,i-8):min(len(lines),i+10)]))
+                          print("---")
+                          if hit >= 40:
+                              break
+                  if hit == 0:
+                      print("(no direct call sites found)")
+
+          print()
+          print("## ARIB/MMT/player configuration")
+          names=("conf-arib.json","nabsplayer-mmt.conf","nabsplayer-route.conf")
+          for name in names:
+              for p in ROOT.rglob(name):
+                  print()
+                  print(f"### {p}")
+                  try:
+                      print(p.read_text(errors="ignore")[:30000])
+                  except Exception:
+                      pass
+          PY
+
+          cat "$REPORT"
+
       - name: Upload text reports
         if: always()
         uses: actions/upload-artifact@v4
