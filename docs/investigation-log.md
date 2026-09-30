@@ -265,3 +265,74 @@ and `v4l2_ext_capture_plane_prop` carries the selected location, capture rectang
 This aligns with both the on-device `libvtcapture` strings and third-party runtime logs showing `V4L2_CID_EXT_CAPTURE_PLANE_PROP` on `video60`.
 
 Therefore the high-FPS pipeline is no longer ambiguous at the driver-API level. The unresolved part is access to the dedicated 81:6 VT capture node from official Developer Mode.
+
+
+### Horizontal sweep of alternative non-root paths
+
+A broad read-only sweep was performed to look for overlooked high-FPS routes outside the previously investigated SSAP/vtCapture/PVR paths.
+
+#### UPnP / DLNA
+
+The TV runs `upnpd` and `umediaserver` as root.
+
+The installed UPnP package contains DMC/DMR Luna-bus libraries:
+
+```text
+libdmcplus_lunabus.so
+libdmrplus_lunabus.so
+```
+
+No MediaServer / ContentDirectory implementation was found in the visible package/service metadata. This makes a built-in "Live TV as DLNA media server" path unlikely.
+
+#### Second-screen gateway
+
+`com.webos.service.secondscreen.gateway` exists and exposes paired-device, service-list and app2app APIs, but calls from the Developer Mode user are denied.
+
+#### Framebuffer
+
+The Developer Mode user is in the `video` group and can open:
+
+```text
+/dev/fb0  osd0_fb
+/dev/fb1  osd1_fb
+/dev/fb2  osd2_fb
+/dev/fb3  crsr_fb
+```
+
+However actual framebuffer reads fail with `EPERM`. These are OSD/cursor framebuffers, not an obvious decoded-video plane.
+
+#### DVR/databroadcast named pipe
+
+`legacybroadcast.databroadcast/getNamedPipePath` exists, but it is grouped with DSM-CC/BML/data-broadcast APIs rather than DVR playback. It is therefore not currently considered a likely full A/V stream endpoint.
+
+#### uMediaServer / Starfish pipeline
+
+The TV runs `umediaserver` and `starfish-media-pipeline`. A private `com.webos.starfish-record-pipeline` role also exists.
+
+This is a genuine remaining candidate and has not yet been fully ruled out, although the visible role only communicates with dynamically-created pipeline controller services and does not expose a general public screen-recording API.
+
+#### Video thumbnailer / ACR / remote diagnostics
+
+Root services/processes discovered include:
+
+```text
+videothumbnailer
+acr2
+remotediag
+captureservice
+```
+
+`videothumbnailer` is registered on both public and private LS2 buses with broad inbound/outbound role permissions, but no public method schema was found.
+
+The ACR API metadata visibly exposes `startAcr` callbacks but no raw-frame/stream export method.
+
+No evidence was found that `remotediag` exposes a reusable local video stream.
+
+#### Remaining overlooked-path candidates after one horizontal pass
+
+The two most technically plausible non-root branches still worth focused analysis are:
+
+1. LG-specific ioctls/control paths on the Developer Mode-visible `/dev/video20` VDEC node.
+2. The private `starfish-record-pipeline` / uMediaServer recording path.
+
+All other branches checked in this sweep are either clearly low-FPS, privilege-gated, OSD-only, data-broadcast-specific, or appear to be renderer/control-plane rather than TV-to-PC media export.
