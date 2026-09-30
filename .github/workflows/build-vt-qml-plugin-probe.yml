@@ -35,6 +35,7 @@ jobs:
               OUT=dist-vtplugin
               mkdir -p "$OUT/Probe/Native"
 
+              sed -i 's/Q_PLUGIN_METADATA(IID QQmlExtensionInterface_iid)/Q_PLUGIN_METADATA(IID "org.qt-project.Qt.QQmlExtensionInterface\\/1.0")/' "$SRC/vtprobeplugin.cpp"
               /usr/lib/qt5/bin/moc "$SRC/vtprobeplugin.cpp" -o "$SRC/vtprobeplugin.moc"
 
               arm-linux-gnueabi-g++ \
