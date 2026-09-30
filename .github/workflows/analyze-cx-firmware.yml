@@ -678,6 +678,40 @@ jobs:
 
           cat "$REPORT"
 
+      - name: Trace SDEC TS dump callers
+        if: always()
+        run: |
+          REPORT=work/report/sdec-tsdump-callers.txt
+          {
+            echo "# SDEC TS dump caller trace"
+            OBJDUMP="$(command -v arm-linux-gnueabihf-objdump || command -v objdump)"
+            for F in               "$(find work/extract -type f -name 'libhal_lg115x.so.2.0.1' -print -quit 2>/dev/null || true)"               "$(find work/extract -type f -name 'libhal_lg115x.so.2' -print -quit 2>/dev/null || true)"               "$(find work/extract -type f -name 'nabs' -print -quit 2>/dev/null || true)"               "$(find work/extract -type f -name 'libgibbsplayer.so.1.0.0' -print -quit 2>/dev/null || true)"; do
+              [ -n "$F" ] || continue
+              echo
+              echo "===== $F ====="
+              "$OBJDUMP" -d -C "$F" > /tmp/full.dis 2>/dev/null || true
+              for sym in                 KADP_SDEC_StartInputTsDump                 KADP_SDEC_GetTsDumpWptr                 KADP_SDEC_StopInputTsDump; do
+                echo
+                echo "### callers of $sym"
+                grep -n "<$sym@plt>" /tmp/full.dis | while IFS=: read -r n rest; do
+                  start=$((n-24)); [ $start -lt 1 ] && start=1
+                  end=$((n+16))
+                  sed -n "${start},${end}p" /tmp/full.dis
+                  echo "---"
+                done
+              done
+            done
+
+            echo
+            echo "## Candidate TS dump strings"
+            find work/extract -type f \( -name 'libhal_lg115x.so*' -o -name 'nabs' -o -name 'libgibbsplayer.so*' \) -print0 2>/dev/null \
+              | xargs -0 -r strings -a -t x 2>/dev/null \
+              | grep -Ei 'StartInputTsDump|GetTsDumpWptr|StopInputTsDump|ts.?dump|dump.?ts|input.?dump|packet.?size|188|192' \
+              | head -4000 || true
+          } > "$REPORT" 2>&1
+
+          cat "$REPORT"
+
       - name: Upload text reports
         if: always()
         uses: actions/upload-artifact@v4
