@@ -616,6 +616,68 @@ jobs:
 
           cat "$REPORT"
 
+      - name: Disassemble KADP transport functions
+        if: always()
+        run: |
+          REPORT=work/report/kadp-transport-disassembly.txt
+          {
+            echo "# KADP transport targeted disassembly"
+            KADP="$(find work/extract -type f -name 'libkadaptor.so.2.0.1' -print -quit 2>/dev/null || true)"
+            HAL="$(find work/extract -type f -name 'libhal_lg115x.so.2' -o -name 'libhal_lg115x.so.2.0.1' | head -1)"
+            OBJDUMP="$(command -v arm-linux-gnueabihf-objdump || command -v objdump)"
+
+            echo "KADP=$KADP"
+            echo "HAL=$HAL"
+            echo "OBJDUMP=$OBJDUMP"
+
+            if [ -n "$KADP" ]; then
+              echo
+              echo "## KADP symbols and disassembly"
+              for sym in                 KADP_SDEC_Open                 KADP_SDEC_OpenChannel                 KADP_SDEC_StartInputTsDump                 KADP_SDEC_GetTsDumpWptr                 KADP_SDEC_StopInputTsDump                 KADP_SDEC_GetStreamFilterBufferInfo                 KADP_SDEC_SetStreamFilterReadPtr                 KADP_PVR_Open                 KADP_PVR_DnOpen                 KADP_PVR_DnGetBufferInfo                 KADP_PVR_DnSetReadPtr                 KADP_PVR_Mmap                 KADP_ARIB2_Open                 KADP_ARIB2_OpenChannel                 KADP_ARIB2_Read; do
+                echo
+                echo "===== $sym ====="
+                line="$(readelf -Ws "$KADP" 2>/dev/null | awk -v s="$sym" '$8==s {print; exit}')"
+                echo "$line"
+                [ -n "$line" ] || continue
+                value="$(awk '{print $2}' <<<"$line")"
+                size="$(awk '{print $3}' <<<"$line")"
+                case "$value:$size" in
+                  *[!0-9A-Fa-f:]*|'':*|*:0) continue ;;
+                esac
+                start=$(( (16#$value) & ~1 ))
+                stop=$(( start + size ))
+                printf 'start=0x%x stop=0x%x size=%s\n' "$start" "$stop" "$size"
+                "$OBJDUMP" -d -C --start-address="$start" --stop-address="$stop" "$KADP" 2>/dev/null || true
+              done
+
+              echo
+              echo "## KADP transport strings"
+              strings -a -t x "$KADP" | grep -Ei                 '/dev/lg/(sdec|pvr|te|arib2|demod)|StartInputTsDump|GetTsDumpWptr|StopInputTsDump|DnGetBufferInfo|DnSetReadPtr|DMX_SET_|DMX_GET_|stream filter|ts dump|mmap|read ptr|write ptr'                 | head -4000 || true
+            fi
+
+            if [ -n "$HAL" ]; then
+              echo
+              echo "## HAL delivery read/data functions"
+              for sym in                 HAL_DELIVERY_RequestData                 HAL_DELIVERY_Read                 HAL_DELIVERY_OpenChannel                 HAL_DELIVERY_GetFilterMessage                 HAL_DELIVERY_CopyFilterData; do
+                echo
+                echo "===== $sym ====="
+                line="$(readelf -Ws "$HAL" 2>/dev/null | awk -v s="$sym" '$8==s {print; exit}')"
+                echo "$line"
+                [ -n "$line" ] || continue
+                value="$(awk '{print $2}' <<<"$line")"
+                size="$(awk '{print $3}' <<<"$line")"
+                case "$value:$size" in
+                  *[!0-9A-Fa-f:]*|'':*|*:0) continue ;;
+                esac
+                start=$(( (16#$value) & ~1 ))
+                stop=$(( start + size ))
+                "$OBJDUMP" -d -C --start-address="$start" --stop-address="$stop" "$HAL" 2>/dev/null || true
+              done
+            fi
+          } > "$REPORT" 2>&1
+
+          cat "$REPORT"
+
       - name: Upload text reports
         if: always()
         uses: actions/upload-artifact@v4
