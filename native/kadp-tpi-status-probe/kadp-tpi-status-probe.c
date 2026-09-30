@@ -50,11 +50,14 @@ int main(void) {
         return 5;
     }
 
-    for (uint32_t i = 0; i < 8; ++i) {
+    static const uint32_t ports[] = {
+        0x00, 0x10, 0x11, 0x12, 0x14, 0x15, 0x30, 0x31, 0x40
+    };
+    for (size_t i = 0; i < sizeof(ports) / sizeof(ports[0]); ++i) {
         uint8_t out[256];
         memset(out, 0, sizeof(out));
-        int rc = KADP_TE_GetTPIStatus(i, out);
-        fprintf(log, "index=%u rc=%d\n", i, rc);
+        int rc = KADP_TE_GetTPIStatus(ports[i], out);
+        fprintf(log, "port=0x%02x rc=%d\n", ports[i], rc);
         dump_hex(log, out, 64);
     }
 
