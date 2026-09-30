@@ -6,6 +6,7 @@
 
 typedef void *(*sdec_open_fn)(void);
 typedef int (*sdec_close_fn)(void);
+typedef int (*sdec_get_wptr_fn)(uint32_t *);
 typedef void (*void_fn)(void);
 
 int main(void) {
@@ -23,8 +24,10 @@ int main(void) {
 
     sdec_open_fn KADP_SDEC_Open = (sdec_open_fn)dlsym(kadp, "KADP_SDEC_Open");
     sdec_close_fn KADP_SDEC_Close = (sdec_close_fn)dlsym(kadp, "KADP_SDEC_Close");
+    sdec_get_wptr_fn KADP_SDEC_GetTsDumpWptr =
+        (sdec_get_wptr_fn)dlsym(kadp, "KADP_SDEC_GetTsDumpWptr");
     void *debug_sym = dlsym(hal, "HAL_SDEC_DebugMenu");
-    if (!KADP_SDEC_Open || !KADP_SDEC_Close || !debug_sym) {
+    if (!KADP_SDEC_Open || !KADP_SDEC_Close || !KADP_SDEC_GetTsDumpWptr || !debug_sym) {
         fprintf(log, "missing symbols err=%s\n", dlerror());
         return 4;
     }
@@ -43,8 +46,20 @@ int main(void) {
 
     fprintf(log, "calling TS Dump Start (interactive stdin)\n");
     ts_start();
-    fprintf(log, "TS Dump Start returned; sleeping 2s\n");
-    sleep(2);
+    fprintf(log, "TS Dump Start returned; polling Wptr for 2s\n");
+    uint32_t first_wptr = 0, last_wptr = 0;
+    int moving = 0;
+    for (int i = 0; i < 20; ++i) {
+        uint32_t wptr = 0;
+        int wrc = KADP_SDEC_GetTsDumpWptr(&wptr);
+        if (i == 0) first_wptr = wptr;
+        if (i > 0 && wptr != last_wptr) moving = 1;
+        last_wptr = wptr;
+        fprintf(log, "wptr[%02d] rc=%d value=0x%08x\n", i, wrc, wptr);
+        usleep(100000);
+    }
+    fprintf(log, "wptr_summary first=0x%08x last=0x%08x moving=%d\n",
+            first_wptr, last_wptr, moving);
 
     fprintf(log, "calling TS Dump Stop\n");
     ts_stop();
