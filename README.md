@@ -82,6 +82,8 @@ com.webos.service.legacybroadcast.dvr/play/getPlayingContentInfo
 
 ただし `getTSPath` を Developer Mode の public Luna bus から呼ぶと permission denied になります。
 
+追加の静的解析で、`libelement-frontend.so` の `AdapterFrontend::getDemodConfig()` が `getTSPath` を呼び、返却値から `portType` / `inputType` / `demodType` を数値として読み取ることを確認しました。したがって **`getTSPath` は TS ファイル/FIFO の pathname を返す API ではなく、チューナーから demod/TS 入力へ接続するハードウェアルーティング情報を返す API と判断できます**。
+
 ### 4. デコード済み映像 capture pipeline
 
 地デジ視聴中の `videooutput/getStatus` では、内部映像 pipeline を確認できました。
@@ -120,6 +122,8 @@ display     : 3840x2160
 
 現時点では Developer Mode の `prisoner` 権限で `vtCaptureTestSuite` を実行すると、Luna Service の privileged 登録で失敗します。
 
+さらに `libvtcapture.so` が内部で `/dev/video60` (`vt-capture-dev`) を使用することを確認しました。kernel/sysfs 上には `video60` (major 81, minor 6) が存在しますが、Developer Mode jail の `/dev` には公開されていません。`prisoner` は有効 capability も持たないため、通常の Developer Mode だけでこの high-FPS V4L2 capture device を直接開く経路は現時点で見つかっていません。
+
 ### 5. capture service
 
 実機には次の service があります。
@@ -133,7 +137,21 @@ com.webos.service.capture/executeOneShot
 
 ただし必要 group の `capture.client` は private です。
 
-### 6. 生 TS 候補
+### 6. 音声 capture
+
+Developer Mode の `prisoner` は `audio` group に所属しており、ALSA capture device にアクセスできます。
+
+特に以下を確認しました。
+
+```text
+hw:1,2  MixerCapture      S32_LE / 2ch / 48kHz
+hw:1,1  SpeakerFeedback   S32_LE / 8ch / 48kHz
+hw:0,12 dsnoop capture    S16_LE / 2ch / 48kHz
+```
+
+`MixerCapture` から 48kHz stereo PCM を連続取得でき、TV を一時的に mute した状態でも十分な非ゼロ信号が残ることを確認しました。したがってスピーカー出力後のマイク録音ではなく、**内部 audio mixer からの pre-mute / pre-volume 系 PCM 取得経路である可能性が高い**です。番組音声との対応は引き続き検証します。
+
+### 7. 生 TS 候補
 
 実機には以下の device node があります。
 
@@ -159,7 +177,7 @@ com.webos.service.capture/executeOneShot
 | 録画再生画面の JPEG 取得 | 成功 |
 | 960x540 簡易ライブビュー | 成功 |
 | 高 FPS のデコード済み映像取得 | 調査中 |
-| 音声取得 | 未達 |
+| 音声取得 | **ALSA MixerCapture で PCM 取得成功、番組音声との対応を検証中** |
 | `getTSPath` 呼び出し | private permission で停止 |
 | 生 TS 取得 | 調査中 |
 | HDD 録画の直接復号 | 未達 |
@@ -168,11 +186,11 @@ com.webos.service.capture/executeOneShot
 
 優先順位は以下です。
 
-1. `libvtcapture` を Developer Mode 環境から直接初期化できる経路の調査
+1. ALSA `MixerCapture` が地デジ/録画の decoded program audio であることを確定
 2. `/dev/lg/pvr*`, `sdec*`, `te0` の ioctl / userspace library 呼び出し調査
-3. `getTSPath` を実際に利用している system process / library の特定
-4. 音声 capture 経路の調査
-5. 成功済み `executeOneShot` を利用した PC viewer の整理
+3. `libvtcapture` / hidden `/dev/video60` の Developer Mode 境界を追加解析
+4. 成功済み `executeOneShot` + ALSA audio を利用した PC viewer の整理
+5. 必要なら privileged/root 方式を別フェーズとして評価
 
 ## 参考実装
 
