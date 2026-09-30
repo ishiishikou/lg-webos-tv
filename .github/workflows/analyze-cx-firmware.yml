@@ -27,7 +27,7 @@ jobs:
       - name: Install extraction dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y             build-essential cmake liblzo2-dev libssl-dev libc6-dev zlib1g-dev             fakeroot squashfs-tools unzip binutils file
+          sudo apt-get install -y             build-essential cmake liblzo2-dev libssl-dev libc6-dev zlib1g-dev             fakeroot squashfs-tools unzip binutils binutils-arm-linux-gnueabihf file
 
       - name: Download official LG firmware
         run: |
@@ -192,6 +192,40 @@ jobs:
               | sort -u | grep -Ei \
               'capture|output|file|path|format|method|handle|option|property|width|height|quality|buffer|memory|shared|socket|stream|raw|image|video|jpeg|jpg|png|bmp|rgb|yuv' \
               | head -3000 || true
+          } > "$REPORT" 2>&1
+
+          cat "$REPORT"
+
+      - name: Disassemble capture-service output handlers
+        if: always()
+        run: |
+          REPORT=work/report/capture-service-disassembly.txt
+          CAPTURE="$(find work/extract -type f -name captureservice -print -quit 2>/dev/null || true)"
+          {
+            echo "# Capture service targeted disassembly"
+            if [ -z "$CAPTURE" ]; then
+              echo "captureservice not found"
+              exit 0
+            fi
+
+            OBJDUMP="$(command -v arm-linux-gnueabihf-objdump || command -v objdump)"
+            echo "objdump=$OBJDUMP"
+
+            for symbol in \
+              '_ZN17CaptureProperties16processSetOutputEP8LSHandleP9LSMessagePv' \
+              '_ZN17CaptureProperties15setClientOutputERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEES7_S7_j' \
+              '_ZN17ScreenCaptureCore14processExecuteEPjS0_S0_' \
+              '_ZN15ImageProcessing6encodeE15CaptureFormat_TPhRjjjj12ColorSpace_TP8_IO_FILE'; do
+              echo
+              echo "===== $symbol ====="
+              "$OBJDUMP" -d -C --disassemble="$symbol" "$CAPTURE" 2>/dev/null || true
+            done
+
+            echo
+            echo "## rodata around output-related literals"
+            strings -a -t x "$CAPTURE" | grep -Ei \
+              'sharedMemory|shared memory|memory name|memory size|dStream|dFileName|fileName|file path|processSetOutput|setClientOutput|writtenBytes|capturedWidth|capturedHeight' \
+              | head -500 || true
           } > "$REPORT" 2>&1
 
           cat "$REPORT"
