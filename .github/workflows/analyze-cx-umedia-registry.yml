@@ -1,0 +1,81 @@
+name: Analyze CX uMedia pipeline registry
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/analyze-cx-umedia-registry.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FW_URL: https://gscs-b2c.lge.com/downloadFile?fileId=Y4IONzJGIHWYuTO4uhPVZA
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake liblzo2-dev libssl-dev libc6-dev zlib1g-dev fakeroot squashfs-tools unzip lz4 xxd binutils binutils-arm-linux-gnueabihf
+      - name: Extract firmware
+        run: |
+          set -euxo pipefail
+          mkdir -p work/zip work/extract work/report
+          curl --fail --location --retry 3 --retry-delay 5 -o work/fw.zip "$FW_URL"
+          unzip -q work/fw.zip -d work/zip
+          EPK="$(find work/zip -type f -iname '*.epk' -print -quit)"
+          test -n "$EPK"
+          cp "$EPK" work/extract/fw.epk
+          git clone --depth 1 https://github.com/openlgtv/epk2extract.git work/epk2extract
+          (cd work/epk2extract && CMAKE_FLAGS=-DCMAKE_BUILD_TYPE=Test ./build.sh)
+          BIN="$(realpath work/epk2extract/build_linux/epk2extract)"
+          (cd work/extract && fakeroot "$BIN" fw.epk)
+          ROOTFS="$(find work/extract -type f -name rootfs.pak -print -quit)"
+          if [ -n "$ROOTFS" ] && ! find work/extract -type d -name 'rootfs.pak.unsquashfs' -print -quit | grep -q .; then
+            (cd "$(dirname "$ROOTFS")" && fakeroot "$BIN" "$(basename "$ROOTFS")")
+          fi
+      - name: Analyze registry and pipeline references
+        run: |
+          set -euxo pipefail
+          ROOT="$(find work/extract -type d -name rootfs.pak.unsquashfs -print -quit)"
+          test -n "$ROOT"
+          OUT=work/report/umedia-registry.txt
+          {
+            echo "# uMedia registry/config files"
+            find "$ROOT" -type f \( -iname '*umediaserver*' -o -iname '*pipeline*.conf' -o -iname '*pipeline*.json' -o -path '*/ums/*' \) -print | sort | head -4000
+            echo
+
+            echo "# Config contents with pipeline definitions"
+            grep -R -n -E 'dynamic_pipeline_dir|pipelines[[:space:]]*=|type[[:space:]]*=|bin[[:space:]]*=|pool[[:space:]]*=|priority[[:space:]]*=' \
+              "$ROOT/etc" "$ROOT/usr/share" "$ROOT/var" 2>/dev/null | grep -Ei 'media|pipeline|ums|starfish|gstreamer' | head -12000 || true
+            echo
+
+            echo "# References to v4l2scalersrc/GPSCALER/hidden devices"
+            grep -aRIl -E 'v4l2scalersrc|/dev/video70|/dev/video27|gps.?scaler|V4L2_EXT_DEV_PATH_GPSCALER' \
+              "$ROOT/usr" "$ROOT/etc" "$ROOT/var" 2>/dev/null | sort | head -1000
+            echo
+
+            while IFS= read -r f; do
+              [ -f "$f" ] || continue
+              echo "===== $f ====="
+              file "$f" || true
+              if file "$f" | grep -q ELF; then
+                strings -a -t x "$f" | grep -Ei 'v4l2scalersrc|/dev/video70|/dev/video27|gps.?scaler|vdec-index|VDO_VDEC_CONNECTING|pipeline|source|sink' | head -2000 || true
+              else
+                grep -n -Ei 'v4l2scalersrc|/dev/video70|/dev/video27|gps.?scaler|vdec-index|pipeline|source|sink' "$f" | head -2000 || true
+              fi
+            done < <(grep -aRIl -E 'v4l2scalersrc|/dev/video70|/dev/video27|gps.?scaler|V4L2_EXT_DEV_PATH_GPSCALER' "$ROOT/usr" "$ROOT/etc" "$ROOT/var" 2>/dev/null | sort)
+          } > "$OUT" 2>&1
+          cat "$OUT"
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cx-umedia-registry-analysis
+          path: work/report/
+          retention-days: 7
