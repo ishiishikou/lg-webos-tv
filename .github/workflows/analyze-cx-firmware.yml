@@ -922,6 +922,207 @@ jobs:
 
           cat "$REPORT"
 
+      - name: Analyze TVRM VSM and legacy-broadcast sink path
+        if: always()
+        run: |
+          REPORT=work/report/tvrm-vsm-sink-analysis.txt
+          python3 - <<'PY' > "$REPORT" 2>&1
+          import re
+          import subprocess
+          from pathlib import Path
+
+          ROOT = Path("work/extract")
+          rootdirs = list(ROOT.rglob("rootfs.pak.unsquashfs"))
+          if not rootdirs:
+              print("rootfs not found")
+              raise SystemExit(0)
+          R = rootdirs[0]
+
+          def run(args, timeout=30):
+              try:
+                  return subprocess.run(
+                      args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                      text=True, errors="replace", timeout=timeout, check=False
+                  ).stdout
+              except Exception as e:
+                  return f"<error: {e}>"
+
+          def show_file(p, max_chars=100000):
+              print()
+              print(f"===== {p} =====")
+              try:
+                  data=p.read_text(errors="replace")
+                  print(data[:max_chars])
+              except Exception as e:
+                  print(f"<read error: {e}>")
+
+          print("# TVRM / VSM / legacy-broadcast sink-path analysis")
+          print(f"rootfs={R}")
+          print()
+
+          exact = [
+              R/"etc/palm/tvrm.json",
+              R/"etc/palm/schemas/tvrm/tvrm.vsm.getSinkInfo.schema",
+              R/"etc/palm/schemas/tvrm/tvrm.api.requestResource.schema",
+              R/"etc/palm/schemas/tvrm/tvrm.api.updatePipelineInfo.schema",
+              R/"etc/palm/schemas/tvrm/tvrm.api.setPipelineState.schema",
+              R/"etc/palm/schemas/tvrm/tvrm.api.getResourceToRelease.schema",
+              R/"etc/palm/schemas/tvrm/tvrm.api.common.input.schema",
+              R/"etc/palm/schemas/tvrm/tvrm.api.common.purpose.schema",
+          ]
+          print("## Exact TVRM configuration and schemas")
+          for p in exact:
+              if p.exists():
+                  show_file(p)
+
+          print()
+          print("## TVRM / legacy-broadcast service and permission metadata")
+          meta_roots=[
+              R/"usr/share/luna-service2",
+              R/"usr/share/ls2",
+          ]
+          meta_files=[]
+          for base in meta_roots:
+              if not base.exists(): continue
+              for p in base.rglob("*"):
+                  if not p.is_file(): continue
+                  n=p.name.lower()
+                  if "tvrm" in n or "legacybroadcast" in n or "legacy-broadcast" in n:
+                      meta_files.append(p)
+          for p in sorted(set(meta_files)):
+              show_file(p, 80000)
+
+          print()
+          print("## GIBB / broadcast schemas matching sink or VSM")
+          schema_roots=[
+              R/"usr/share/gibb/schema",
+              R/"etc/palm/schemas",
+          ]
+          matched=[]
+          for base in schema_roots:
+              if not base.exists(): continue
+              for p in base.rglob("*"):
+                  if not p.is_file(): continue
+                  try:
+                      data=p.read_text(errors="ignore")
+                  except Exception:
+                      continue
+                  hay=(p.name+"\n"+data)
+                  if re.search(r"getSinkInfo|video.?sink|vsmif|AVProxy|setSink|sinkInfo|registerPipeline", hay, re.I):
+                      matched.append(p)
+          for p in sorted(set(matched)):
+              show_file(p, 100000)
+
+          print()
+          print("## Static legacy-broadcast sink/VSM evidence")
+          legacy=next(iter(R.rglob("legacy-broadcast")),None)
+          if legacy and legacy.is_file():
+              print(f"legacy={legacy}")
+              print("-- file --")
+              print(run(["file",str(legacy)]))
+              print("-- dynamic dependencies --")
+              for line in run(["readelf","-d",str(legacy)]).splitlines():
+                  if "NEEDED" in line:
+                      print(line)
+              print("-- sink/VSM symbols --")
+              syms=run(["readelf","-Ws",str(legacy)],60)
+              for line in syms.splitlines():
+                  if re.search(r"AVProxy|VSM|vsm|Sink|sink|GetVideoPath|VTP|Pipeline",line):
+                      print(line)
+              print("-- sink/VSM strings --")
+              st=run(["strings","-a","-t","x",str(legacy)],60)
+              for line in st.splitlines():
+                  if re.search(
+                      r"AVProxy(Set|Get)|video.?sink|audio.?sink|vsmif|VSM|"
+                      r"getSinkInfo|setSink|sinkInfo|"
+                      r"registerPipeline|unRegisterPipeline|"
+                      r"isPipelineIdConnectedVsm|GetVideoPathByPipeline|"
+                      r"API_VTP_(Open|Connect|Close)|"
+                      r"CAPTURE_VIDEO|WATCH_VIDEO_ONLY|WATCH_I_FRAME",
+                      line,re.I
+                  ):
+                      print(line)
+
+              print()
+              print("## Targeted exported/local function disassembly")
+              objdump="arm-linux-gnueabihf-objdump"
+              candidates=[]
+              for line in syms.splitlines():
+                  if re.search(
+                      r"interface_vsm_|tv_path_isPipelineIdConnectedVsm|"
+                      r"tv_hndl_registerVsmifPipeline|tv_hndl_unregisterVsmifPipeline|"
+                      r"API_VIDEO_GetVideoPathByPipelineID",
+                      line
+                  ):
+                      parts=line.split()
+                      if len(parts)>=8 and parts[2].isdigit() and parts[1] != "00000000":
+                          candidates.append((parts[7],parts[1],parts[2]))
+              for name,val,size in candidates[:80]:
+                  try:
+                      start=int(val,16)&~1
+                      sz=int(size)
+                  except Exception:
+                      continue
+                  if sz<=0 or sz>200000:
+                      continue
+                  stop=start+sz
+                  print()
+                  print(f"===== {name} 0x{start:x}..0x{stop:x} =====")
+                  print(run([objdump,"-d","-C",f"--start-address={start}",f"--stop-address={stop}",str(legacy)],60))
+
+          print()
+          print("## AV proxy wrapper API")
+          avlibs=[]
+          for pat in ("libav-proxy-wrapper.so*","libav-proxy.so*","libav-connector.so*"):
+              avlibs.extend([p for p in R.rglob(pat) if p.is_file()])
+          for p in sorted(set(avlibs)):
+              print()
+              print(f"===== {p} =====")
+              print(run(["file",str(p)]))
+              sy=run(["readelf","-Ws",str(p)],30)
+              for line in sy.splitlines():
+                  if re.search(r"Sink|sink|VSM|vsm|Pipeline|AVProxy|Video|video",line):
+                      print(line)
+              print("-- strings --")
+              for line in run(["strings","-a","-t","x",str(p)],30).splitlines():
+                  if re.search(
+                      r"setSink|getSink|sinkInfo|video.?sink|VSM|vsm|"
+                      r"pipeline|window|plane|port|resource|luna://|com\.webos\.",
+                      line,re.I
+                  ):
+                      print(line)
+
+          print()
+          print("## Global exact-string callers")
+          needles=[
+              "getSinkInfo",
+              "AVProxySetSink",
+              "com.webos.service.legacybroadcast.videosink",
+              "com.webos.service.legacybroadcast.vsmif",
+          ]
+          for needle in needles:
+              print()
+              print(f"### {needle}")
+              hits=0
+              for p in R.rglob("*"):
+                  if not p.is_file(): continue
+                  try:
+                      if p.stat().st_size>80_000_000: continue
+                  except Exception:
+                      continue
+                  out=run(["strings","-a",str(p)],8)
+                  if needle.lower() in out.lower():
+                      print(p)
+                      for line in out.splitlines():
+                          if needle.lower() in line.lower():
+                              print("  "+line[:3000])
+                      hits+=1
+                      if hits>=100:
+                          break
+          PY
+
+          cat "$REPORT"
+
       - name: Upload text reports
         if: always()
         uses: actions/upload-artifact@v4
