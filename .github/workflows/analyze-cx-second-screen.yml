@@ -1,0 +1,107 @@
+name: Analyze CX second screen routes
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/analyze-cx-second-screen.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FW_URL: https://gscs-b2c.lge.com/downloadFile?fileId=Y4IONzJGIHWYuTO4uhPVZA
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake liblzo2-dev libssl-dev libc6-dev zlib1g-dev fakeroot squashfs-tools unzip lz4 xxd binutils binutils-arm-linux-gnueabihf
+      - name: Download and extract firmware
+        run: |
+          set -euxo pipefail
+          mkdir -p work/zip work/extract work/report
+          curl --fail --location --retry 3 --retry-delay 5 -o work/firmware.zip "$FW_URL"
+          unzip -q work/firmware.zip -d work/zip
+          EPK="$(find work/zip -type f -iname '*.epk' -print -quit)"
+          test -n "$EPK"
+          cp "$EPK" work/extract/firmware.epk
+          git clone --depth 1 https://github.com/openlgtv/epk2extract.git work/epk2extract
+          (cd work/epk2extract && CMAKE_FLAGS=-DCMAKE_BUILD_TYPE=Test ./build.sh)
+          BIN="$(realpath work/epk2extract/build_linux/epk2extract)"
+          (cd work/extract && fakeroot "$BIN" firmware.epk)
+          ROOTFS="$(find work/extract -type f -name rootfs.pak -print -quit)"
+          if [ -n "$ROOTFS" ] && ! find work/extract -type d -name 'rootfs.pak.unsquashfs' -print -quit | grep -q .; then
+            (cd "$(dirname "$ROOTFS")" && fakeroot "$BIN" "$(basename "$ROOTFS")")
+          fi
+      - name: Analyze second-screen, UPnP and TVLink
+        run: |
+          set -euxo pipefail
+          ROOT="$(find work/extract -type d -name rootfs.pak.unsquashfs -print -quit)"
+          test -n "$ROOT"
+          OUT=work/report/second-screen-routes.txt
+          SSG="$ROOT/usr/palm/services/com.webos.service.secondscreen.gateway"
+          {
+            echo "# second-screen / network route analysis"
+            echo "root=$ROOT"
+            echo
+
+            echo "## Second-screen relevant interfaces"
+            for f in               "$SSG/interfaces/com.webos.service.capture.interface"               "$SSG/interfaces/com.webos.service.livepick.interface"               "$SSG/interfaces/com.webos.service.utp.channel.interface"               "$SSG/interfaces/com.webos.service.utp.dvr.interface"               "$SSG/interfaces/tv.interface"               "$SSG/interfaces/media.controls.interface"               "$SSG/interfaces/media.viewer.interface"               "$SSG/interfaces/com.webos.service.secondscreen.gateway.interface"               "$SSG/interfaces/api.interface"; do
+              [ -f "$f" ] || continue
+              echo "===== $f ====="
+              sed -n '1,1200p' "$f"
+            done
+            echo
+
+            echo "## Gateway source keyword hits"
+            grep -R -n -Ei               'capture|screenshot|screen.?shot|live.?pick|live.?tv|stream|video|broadcast|channel|tuner|dvr|record|media.?viewer|uri|url|websocket|http|socket|transport|thumbnail|frame'               "$SSG" 2>/dev/null               --exclude='*.map' --exclude='*.min.js'               | head -12000 || true
+            echo
+
+            echo "## Gateway top-level/config"
+            for f in "$SSG/package.json" "$SSG/second_screen_gateway.js" "$SSG/config.js" "$ROOT/etc/xinetd.d/ssg_http" "$ROOT/etc/xinetd.d/ssg_https"; do
+              [ -f "$f" ] || continue
+              echo "===== $f ====="
+              sed -n '1,1500p' "$f"
+            done
+            echo
+
+            echo "## LS2 permissions/roles"
+            for f in               "$ROOT/usr/share/luna-service2/api-permissions.d/com.webos.service.secondscreen.gateway.api.json"               "$ROOT/usr/share/luna-service2/client-permissions.d/com.webos.service.secondscreen.gateway.perm.json"               "$ROOT/usr/share/luna-service2/roles.d/com.webos.service.secondscreen.gateway.role.json"; do
+              [ -f "$f" ] || continue
+              echo "===== $f ====="
+              cat "$f"
+            done
+            echo
+
+            echo "## UPnP package/binary strings"
+            U="$ROOT/usr/sbin/upnpd"
+            if [ -f "$U" ]; then
+              file "$U"
+              sha256sum "$U"
+              strings -a -t x "$U" | grep -Ei                 'ContentDirectory|ConnectionManager|MediaServer|MediaRenderer|DMS|DMC|DMR|AVTransport|DTCP|DLNA|http|stream|live|broadcast|tuner|record|channel|source|sink|server|client|url|uri'                 | head -12000 || true
+            fi
+            echo
+
+            echo "## TVLink binaries"
+            for U in "$ROOT/usr/sbin/tvlink-network-proxy" "$ROOT/usr/sbin/tvlinkcmdprocessor"; do
+              [ -f "$U" ] || continue
+              echo "===== $U ====="
+              file "$U"
+              sha256sum "$U"
+              strings -a -t x "$U" | grep -Ei                 'stream|video|audio|live|broadcast|channel|tuner|socket|listen|port|http|tcp|udp|rtp|rtsp|proxy|media|screen|capture|record|uri|url|command'                 | head -12000 || true
+            done
+          } > "$OUT" 2>&1
+          cat "$OUT"
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cx-second-screen-analysis
+          path: work/report/
+          retention-days: 7
