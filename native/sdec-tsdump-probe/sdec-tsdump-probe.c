@@ -40,11 +40,23 @@ static int sync_score(const unsigned char *buf, size_t n, int period, int *best_
     return best;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     const uint32_t HMA_SIZE = 0x753000u;
     const size_t MAX_OUT = 4u * 1024u * 1024u;
     const uint64_t RUN_MS = 500u;
-    const char *OUT = "/tmp/sdec_probe.ts";
+    uint32_t input_port = 0x10u;
+    if (argc >= 2) {
+        char *endp = NULL;
+        unsigned long v = strtoul(argv[1], &endp, 0);
+        if (!endp || *endp != '\0' || !(v == 0x10u || v == 0x12u || v == 0x15u)) {
+            fprintf(stderr, "usage: %s [0x10|0x12|0x15]\n", argv[0]);
+            return 2;
+        }
+        input_port = (uint32_t)v;
+    }
+    char out_path[64];
+    snprintf(out_path, sizeof(out_path), "/tmp/sdec_probe_%02x.ts", input_port);
+    const char *OUT = out_path;
 
     FILE *log = fopen("/tmp/sdec_tsdump_probe.log", "w");
     if (!log) return 2;
@@ -105,12 +117,13 @@ int main(void) {
         0u,              /* Dump Mode: ALL */
         0u,              /* Clock Source: AUTO */
         1u,              /* Clock Resolution: 27 MHz */
-        0x10u,           /* Input Port: TPI_IN0 / internal demod */
+        input_port,      /* Input Port: evidence-backed TPI candidate */
         4u,              /* LG debug default Main channel selector */
         paddr,
         paddr + HMA_SIZE,
         0x4b00u          /* LG built-in fixed value */
     };
+    fprintf(log, "input_port=0x%02x out=%s\n", input_port, OUT);
     fprintf(log, "cfg=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
             cfg[0],cfg[1],cfg[2],cfg[3],cfg[4],cfg[5],cfg[6],cfg[7]);
 
