@@ -111,7 +111,7 @@ jobs:
             BASE=0xffffffc000088000
             OBJDUMP=aarch64-linux-gnu-objdump
 
-            for spec in               "get_tpi_status:0xffffffc0009a4550:0xffffffc0009a46c0"               "te_get_tpi_status:0xffffffc0009a5760:0xffffffc0009a5820"               "te_debug_show_tpi_status:0xffffffc0009a5f70:0xffffffc0009a61a8"               "TE_REG_GetTpiStatus:0xffffffc0009b1830:0xffffffc0009b1d48"; do
+            for spec in               "get_tpi_status:0xffffffc0009a4550:0xffffffc0009a46c0"               "te_get_tpi_status:0xffffffc0009a5760:0xffffffc0009a5820"               "te_debug_show_tpi_status:0xffffffc0009a5f70:0xffffffc0009a61a8"               "TE_REG_GetTpiStatus:0xffffffc0009b1830:0xffffffc0009b1d48"               "sdec_dev_read:0xffffffc0009d64b0:0xffffffc0009d65b0"               "sdec_ioc_config_output_port:0xffffffc0009d7400:0xffffffc0009d7498"               "sdec_input_dump_callback:0xffffffc0009d7610:0xffffffc0009d7790"               "sdec_input_dump_read_callback:0xffffffc0009d7790:0xffffffc0009d77c8"               "sdec_start_input_dump:0xffffffc0009d7c98:0xffffffc0009d8080"               "sdec_ioc_get_dump_buf_info:0xffffffc0009d8980:0xffffffc0009d8ab0"; do
               IFS=: read -r name start stop <<<"$spec"
               echo
               echo "===== $name $start..$stop ====="
