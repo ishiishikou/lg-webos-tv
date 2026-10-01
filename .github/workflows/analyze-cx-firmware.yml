@@ -761,6 +761,167 @@ jobs:
 
           cat "$REPORT"
 
+      - name: Analyze unmanaged Live TV resource clients
+        if: always()
+        run: |
+          REPORT=work/report/live-tv-resource-clients.txt
+          python3 - <<'PY' > "$REPORT" 2>&1
+          import re
+          import subprocess
+          from pathlib import Path
+
+          ROOT = Path("work/extract")
+          CANDIDATE_NAMES = {
+              "legacy-broadcast",
+              "tvrm",
+              "utp",
+              "hybridtv-manager",
+              "tvservicemock",
+              "tv-reservation-agent",
+              "videooutputd",
+          }
+
+          def run(args, timeout=20):
+              try:
+                  return subprocess.run(
+                      args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                      text=True, errors="replace", timeout=timeout, check=False
+                  ).stdout
+              except Exception:
+                  return ""
+
+          def is_elf(p):
+              try:
+                  with p.open("rb") as fh:
+                      return fh.read(4) == b"\x7fELF"
+              except Exception:
+                  return False
+
+          def strings(p):
+              return run(["strings", "-a", str(p)], timeout=20)
+
+          def dynsyms(p):
+              return run(["readelf", "-Ws", str(p)], timeout=20)
+
+          print("# Unmanaged Live TV Resource Manager client analysis")
+          print()
+          print("Live target observation to correlate:")
+          print("type=tv, is_managed=false")
+          print("resources=DTU SDEC VTP VDEC VDEC_BUS ATP ADEC ...")
+          print()
+
+          elfs = [p for p in ROOT.rglob("*") if p.is_file() and is_elf(p)]
+
+          print("## Named process candidates")
+          named = [p for p in elfs if p.name in CANDIDATE_NAMES]
+          for p in sorted(named):
+              print()
+              print(f"### {p}")
+              print(run(["file", str(p)]).strip())
+              print("-- dynamic dependencies --")
+              for line in run(["readelf", "-d", str(p)]).splitlines():
+                  if "NEEDED" in line or "RPATH" in line or "RUNPATH" in line:
+                      print(line)
+              print("-- Resource Manager / TV resource symbols --")
+              matched = [
+                  line.strip() for line in dynsyms(p).splitlines()
+                  if re.search(
+                      r"ResourceManager|registerPipeline|unregisterPipeline|"
+                      r"VTP|VDEC|SDEC|DTU|ADEC|ATP|resource",
+                      line, re.I
+                  )
+              ]
+              for line in matched[:1000]:
+                  print(line)
+              print("-- relevant strings --")
+              matched = [
+                  line for line in strings(p).splitlines()
+                  if re.search(
+                      r"(^|[^A-Za-z])(VTP|VDEC_BUS|VDEC|SDEC|DTU|ATP|ADEC)([^A-Za-z]|$)|"
+                      r"registerPipeline|ResourceManager|resource_mgr|"
+                      r"pipeline.{0,30}tv|type.{0,20}tv|"
+                      r"com\.webos\.|luna://|"
+                      r"video|capture|snapshot|sink|record|frame|texture|"
+                      r"decoder|descram|display",
+                      line, re.I
+                  )
+              ]
+              for line in matched[:2500]:
+                  print(line)
+
+          print()
+          print("## ELF reverse index: VTP / VDEC_BUS")
+          indexed=[]
+          for p in elfs:
+              s=strings(p)
+              has_vtp=bool(re.search(r"(^|[^A-Za-z])VTP([^A-Za-z]|$)", s))
+              has_vdec_bus="VDEC_BUS" in s
+              if not (has_vtp or has_vdec_bus):
+                  continue
+              sy=dynsyms(p)
+              has_rm=bool(re.search(r"ResourceManager|registerPipeline|resource_mgr", sy+s, re.I))
+              indexed.append((p,has_vtp,has_vdec_bus,has_rm))
+          for p,vtp,vdb,rm in sorted(indexed, key=lambda x: str(x[0])):
+              print(f"{p}\tVTP={int(vtp)}\tVDEC_BUS={int(vdb)}\tRM={int(rm)}")
+              if rm or (vtp and vdb):
+                  for line in strings(p).splitlines():
+                      if re.search(
+                          r"VTP|VDEC_BUS|registerPipeline|ResourceManager|"
+                          r"(^|[^A-Za-z])tv([^A-Za-z]|$)|"
+                          r"capture|snapshot|sink|frame|record|video",
+                          line, re.I
+                      ):
+                          print("  " + line[:2000])
+
+          print()
+          print("## ResourceManagerClient consumers among TV/broadcast components")
+          for p in elfs:
+              sy=dynsyms(p)
+              if not re.search(r"ResourceManagerClient|registerPipeline", sy):
+                  continue
+              path_l=str(p).lower()
+              s=strings(p)
+              if not (
+                  re.search(r"tv|broadcast|tuner|frontend|video|dvr|pvr|utp|hybrid", path_l)
+                  or re.search(r"VTP|VDEC_BUS|SDEC|DTU|pipeline.{0,20}tv", s, re.I)
+              ):
+                  continue
+              print()
+              print(f"### {p}")
+              for line in sy.splitlines():
+                  if re.search(r"ResourceManagerClient|registerPipeline|unregisterPipeline", line):
+                      print(line.strip())
+              for line in s.splitlines():
+                  if re.search(
+                      r"VTP|VDEC_BUS|SDEC|DTU|VDEC|ADEC|ATP|"
+                      r"registerPipeline|pipeline.{0,30}tv|type.{0,20}tv|"
+                      r"com\.webos\.|capture|snapshot|sink|frame|record",
+                      line, re.I
+                  ):
+                      print(line[:2000])
+
+          print()
+          print("## Service/role metadata for named candidates")
+          text_ext={".json",".conf",".service",".xml",".ini",".sh"}
+          for p in ROOT.rglob("*"):
+              if not p.is_file() or p.suffix.lower() not in text_ext:
+                  continue
+              try:
+                  data=p.read_text(errors="ignore")
+              except Exception:
+                  continue
+              if any(name in data for name in CANDIDATE_NAMES):
+                  print()
+                  print(f"### {p}")
+                  for line in data.splitlines():
+                      if any(name in line for name in CANDIDATE_NAMES) or re.search(
+                          r"allowedNames|permissions|service|inbound|outbound", line
+                      ):
+                          print(line[:2000])
+          PY
+
+          cat "$REPORT"
+
       - name: Upload text reports
         if: always()
         uses: actions/upload-artifact@v4
