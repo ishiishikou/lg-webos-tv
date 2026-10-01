@@ -712,6 +712,55 @@ jobs:
 
           cat "$REPORT"
 
+      - name: Disassemble TE kernel TPI status path
+        if: always()
+        run: |
+          REPORT=work/report/te-kernel-tpi-status.txt
+          {
+            echo "# TE kernel TPI status targeted disassembly"
+            sudo apt-get update >/dev/null
+            sudo apt-get install -y lz4 binutils-aarch64-linux-gnu >/dev/null
+
+            IMG_LZ4="$(find work/extract -type f -name 'Image.lz4' -print -quit 2>/dev/null || true)"
+            if [ -z "$IMG_LZ4" ]; then
+              IMG_LZ4="$(find work/extract -type f -iname '*image*.lz4' -print -quit 2>/dev/null || true)"
+            fi
+            echo "Image.lz4=$IMG_LZ4"
+            [ -n "$IMG_LZ4" ] || { echo "kernel Image.lz4 not found"; exit 0; }
+
+            mkdir -p work/kernel
+            lz4 -d -f "$IMG_LZ4" work/kernel/Image >/dev/null
+            echo
+            file work/kernel/Image || true
+            ls -lh work/kernel/Image
+            sha256sum work/kernel/Image
+            echo
+            echo "arm64 Image magic @ 0x38:"
+            dd if=work/kernel/Image bs=1 skip=56 count=4 2>/dev/null | xxd -g1 || true
+
+            # Live JP runtime kallsyms anchors:
+            # _text                       ffffffc000088000
+            # get_tpi_status              ffffffc0009a4550..ffffffc0009a46c0
+            # te_get_tpi_status           ffffffc0009a5760..ffffffc0009a5820
+            # te_debug_show_tpi_status    ffffffc0009a5f70..ffffffc0009a61a8
+            # TE_REG_GetTpiStatus         ffffffc0009b1830..ffffffc0009b1d48
+            BASE=0xffffffc000088000
+            OBJDUMP=aarch64-linux-gnu-objdump
+
+            for spec in               "get_tpi_status:0xffffffc0009a4550:0xffffffc0009a46c0"               "te_get_tpi_status:0xffffffc0009a5760:0xffffffc0009a5820"               "te_debug_show_tpi_status:0xffffffc0009a5f70:0xffffffc0009a61a8"               "TE_REG_GetTpiStatus:0xffffffc0009b1830:0xffffffc0009b1d48"; do
+              IFS=: read -r name start stop <<<"$spec"
+              echo
+              echo "===== $name $start..$stop ====="
+              "$OBJDUMP" -D -b binary -m aarch64                 --adjust-vma="$BASE"                 --start-address="$start" --stop-address="$stop"                 work/kernel/Image 2>&1 || true
+            done
+
+            echo
+            echo "## Kernel strings around TPI/input status"
+            strings -a -t x work/kernel/Image | grep -Ei               'TPI|input.*status|packet.*count|sync.*type|sync.*byte|SOP|VALIDONLY|CI.*input|DEMOD|EXT_INPUT'               | head -3000 || true
+          } > "$REPORT" 2>&1
+
+          cat "$REPORT"
+
       - name: Upload text reports
         if: always()
         uses: actions/upload-artifact@v4
