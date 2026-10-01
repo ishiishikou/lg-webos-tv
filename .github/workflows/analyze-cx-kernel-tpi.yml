@@ -77,19 +77,19 @@ jobs:
         run: |
           set -euxo pipefail
           REPORT=work/report/te-kernel-tpi-status.txt
-          IMG_LZ4="$(find work/extract -type f -name 'Image.lz4*' -print -quit)"
-          test -n "$IMG_LZ4"
+          KERNEL_RAW="$(find work/extract -type f -name 'kernel.pak.unlz4' -print -quit)"
+          test -n "$KERNEL_RAW"
 
           mkdir -p work/kernel
-          lz4 -d -f "$IMG_LZ4" work/kernel/Image
+          cp "$KERNEL_RAW" work/kernel/Image
 
           {
             echo "# TE kernel TPI status targeted disassembly"
             echo
             echo "## Source image"
-            echo "compressed=$IMG_LZ4"
-            ls -lh "$IMG_LZ4" work/kernel/Image
-            sha256sum "$IMG_LZ4" work/kernel/Image
+            echo "raw=$KERNEL_RAW"
+            ls -lh "$KERNEL_RAW" work/kernel/Image
+            sha256sum "$KERNEL_RAW" work/kernel/Image
             echo
             echo "## ARM64 Image header"
             echo -n "magic@0x38="
@@ -126,6 +126,7 @@ jobs:
           cat "$REPORT"
 
       - name: Upload kernel report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cx-kernel-tpi-analysis
