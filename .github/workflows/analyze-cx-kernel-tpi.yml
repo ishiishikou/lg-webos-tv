@@ -1,4 +1,4 @@
-name: Analyze CX kernel TPI path
+name: Analyze CX kernel internals
 
 on:
   workflow_dispatch:
@@ -73,7 +73,7 @@ jobs:
             find work/extract -type f \(               -name 'Image.lz4*' -o               -name 'kernel.pak.unlz4' -o               -name 'kernel.pak'             \) -printf '%p\t%s bytes\n' | sort
           } | tee work/report/kernel-candidates.txt
 
-      - name: Disassemble TE TPI status path
+      - name: Disassemble TE SDEC VDEC paths
         run: |
           set -euxo pipefail
           REPORT=work/report/te-kernel-tpi-status.txt
@@ -111,7 +111,7 @@ jobs:
             BASE=0xffffffc000088000
             OBJDUMP=aarch64-linux-gnu-objdump
 
-            for spec in               "get_tpi_status:0xffffffc0009a4550:0xffffffc0009a46c0"               "te_get_tpi_status:0xffffffc0009a5760:0xffffffc0009a5820"               "te_debug_show_tpi_status:0xffffffc0009a5f70:0xffffffc0009a61a8"               "TE_REG_GetTpiStatus:0xffffffc0009b1830:0xffffffc0009b1d48"               "sdec_dev_read:0xffffffc0009d64b0:0xffffffc0009d65b0"               "sdec_ioc_config_output_port:0xffffffc0009d7400:0xffffffc0009d7498"               "sdec_input_dump_callback:0xffffffc0009d7610:0xffffffc0009d7790"               "sdec_input_dump_read_callback:0xffffffc0009d7790:0xffffffc0009d77c8"               "sdec_start_input_dump:0xffffffc0009d7c98:0xffffffc0009d8080"               "sdec_ioc_get_dump_buf_info:0xffffffc0009d8980:0xffffffc0009d8ab0"; do
+            for spec in               "get_tpi_status:0xffffffc0009a4550:0xffffffc0009a46c0"               "te_get_tpi_status:0xffffffc0009a5760:0xffffffc0009a5820"               "te_debug_show_tpi_status:0xffffffc0009a5f70:0xffffffc0009a61a8"               "TE_REG_GetTpiStatus:0xffffffc0009b1830:0xffffffc0009b1d48"               "sdec_dev_read:0xffffffc0009d64b0:0xffffffc0009d65b0"               "sdec_ioc_config_output_port:0xffffffc0009d7400:0xffffffc0009d7498"               "sdec_input_dump_callback:0xffffffc0009d7610:0xffffffc0009d7790"               "sdec_input_dump_read_callback:0xffffffc0009d7790:0xffffffc0009d77c8"               "sdec_start_input_dump:0xffffffc0009d7c98:0xffffffc0009d8080"               "sdec_ioc_get_dump_buf_info:0xffffffc0009d8980:0xffffffc0009d8ab0"               "vdec_g_ctrl:0xffffffc000b20c80:0xffffffc000b20f10"               "vdec_set_vdo:0xffffffc000b21d58:0xffffffc000b21ee8"               "vdec_fh_release:0xffffffc000b22220:0xffffffc000b22350"               "vdec_fh_open:0xffffffc000b22350:0xffffffc000b22500"               "vdec_get_ext_ctrls:0xffffffc000b23b18:0xffffffc000b24660"               "vdec_g_ext_ctrls:0xffffffc000b24660:0xffffffc000b24878"               "vdec_s_ctrl:0xffffffc000b24ad8:0xffffffc000b24ff8"               "vdo_fh_release:0xffffffc000b261a8:0xffffffc000b26228"               "vdo_fh_open:0xffffffc000b26228:0xffffffc000b263a0"               "vdo_g_ctrl:0xffffffc000b264e8:0xffffffc000b26688"               "vdo_connect:0xffffffc000b268b0:0xffffffc000b26b28"; do
               IFS=: read -r name start stop <<<"$spec"
               echo
               echo "===== $name $start..$stop ====="
@@ -129,6 +129,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cx-kernel-tpi-analysis
-          path: work/report/
+          name: cx-kernel-analysis
+          path: |
+            work/report/
+            work/kernel/Image
           retention-days: 7
