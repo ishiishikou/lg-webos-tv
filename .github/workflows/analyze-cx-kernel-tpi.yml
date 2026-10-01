@@ -1,0 +1,133 @@
+name: Analyze CX kernel TPI path
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/analyze-cx-kernel-tpi.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      FW_URL: https://gscs-b2c.lge.com/downloadFile?fileId=Y4IONzJGIHWYuTO4uhPVZA
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y             build-essential cmake liblzo2-dev libssl-dev libc6-dev zlib1g-dev             fakeroot squashfs-tools unzip lz4 xxd             binutils binutils-aarch64-linux-gnu
+
+      - name: Download and unpack firmware
+        run: |
+          set -euxo pipefail
+          mkdir -p work/zip work/extract work/report
+          curl --fail --location --retry 3 --retry-delay 5             -o work/firmware.zip "$FW_URL"
+          unzip -q work/firmware.zip -d work/zip
+          EPK="$(find work/zip -type f -iname '*.epk' -print -quit)"
+          test -n "$EPK"
+          cp "$EPK" work/extract/firmware.epk
+          sha256sum work/firmware.zip > work/report/firmware-sha256.txt
+
+      - name: Build epk2extract
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 https://github.com/openlgtv/epk2extract.git work/epk2extract
+          (
+            cd work/epk2extract
+            CMAKE_FLAGS=-DCMAKE_BUILD_TYPE=Test ./build.sh
+          )
+
+      - name: Extract EPK and rootfs
+        run: |
+          set -euxo pipefail
+          BIN="$(realpath work/epk2extract/build_linux/epk2extract)"
+          test -x "$BIN"
+          test -f "$(dirname "$BIN")/AES.key"
+          test -f "$(dirname "$BIN")/o20.pem"
+
+          (
+            cd work/extract
+            fakeroot "$BIN" firmware.epk
+          ) 2>&1 | tee work/report/epk-extract.log
+
+          ROOTFS="$(find work/extract -type f -name 'rootfs.pak' -print -quit)"
+          if [ -n "$ROOTFS" ] && ! find work/extract -type d -name 'rootfs.pak.unsquashfs' -print -quit | grep -q .; then
+            ROOTDIR="$(dirname "$ROOTFS")"
+            ROOTBASE="$(basename "$ROOTFS")"
+            (
+              cd "$ROOTDIR"
+              fakeroot "$BIN" "$ROOTBASE"
+            ) 2>&1 | tee -a work/report/rootfs-extract.log
+          fi
+
+          {
+            echo "# Kernel image candidates"
+            find work/extract -type f \(               -name 'Image.lz4*' -o               -name 'kernel.pak.unlz4' -o               -name 'kernel.pak'             \) -printf '%p\t%s bytes\n' | sort
+          } | tee work/report/kernel-candidates.txt
+
+      - name: Disassemble TE TPI status path
+        run: |
+          set -euxo pipefail
+          REPORT=work/report/te-kernel-tpi-status.txt
+          IMG_LZ4="$(find work/extract -type f -name 'Image.lz4*' -print -quit)"
+          test -n "$IMG_LZ4"
+
+          mkdir -p work/kernel
+          lz4 -d -f "$IMG_LZ4" work/kernel/Image
+
+          {
+            echo "# TE kernel TPI status targeted disassembly"
+            echo
+            echo "## Source image"
+            echo "compressed=$IMG_LZ4"
+            ls -lh "$IMG_LZ4" work/kernel/Image
+            sha256sum "$IMG_LZ4" work/kernel/Image
+            echo
+            echo "## ARM64 Image header"
+            echo -n "magic@0x38="
+            dd if=work/kernel/Image bs=1 skip=56 count=4 2>/dev/null | xxd -p
+            echo -n "text_offset@0x08="
+            dd if=work/kernel/Image bs=1 skip=8 count=8 2>/dev/null | xxd -p
+            echo -n "image_size@0x10="
+            dd if=work/kernel/Image bs=1 skip=16 count=8 2>/dev/null | xxd -p
+            echo
+            echo "## Version strings"
+            strings -a work/kernel/Image | grep -m 20 -E 'Linux version|4\.4\.84|jcl4tvmr' || true
+
+            # Live JP runtime anchors from /proc/kallsyms:
+            # _text                       ffffffc000088000
+            # get_tpi_status              ffffffc0009a4550..ffffffc0009a46c0
+            # te_get_tpi_status           ffffffc0009a5760..ffffffc0009a5820
+            # te_debug_show_tpi_status    ffffffc0009a5f70..ffffffc0009a61a8
+            # TE_REG_GetTpiStatus         ffffffc0009b1830..ffffffc0009b1d48
+            BASE=0xffffffc000088000
+            OBJDUMP=aarch64-linux-gnu-objdump
+
+            for spec in               "get_tpi_status:0xffffffc0009a4550:0xffffffc0009a46c0"               "te_get_tpi_status:0xffffffc0009a5760:0xffffffc0009a5820"               "te_debug_show_tpi_status:0xffffffc0009a5f70:0xffffffc0009a61a8"               "TE_REG_GetTpiStatus:0xffffffc0009b1830:0xffffffc0009b1d48"; do
+              IFS=: read -r name start stop <<<"$spec"
+              echo
+              echo "===== $name $start..$stop ====="
+              "$OBJDUMP" -D -b binary -m aarch64                 --adjust-vma="$BASE"                 --start-address="$start" --stop-address="$stop"                 work/kernel/Image 2>&1 || true
+            done
+
+            echo
+            echo "## TPI/input-related strings"
+            strings -a -t x work/kernel/Image | grep -Ei               'tpi|input.*status|packet.*count|sync.*type|sync.*byte|SOP|VALIDONLY|CI.*input|DEMOD|EXT_INPUT'               | head -4000 || true
+          } > "$REPORT" 2>&1
+
+          cat "$REPORT"
+
+      - name: Upload kernel report
+        uses: actions/upload-artifact@v4
+        with:
+          name: cx-kernel-tpi-analysis
+          path: work/report/
+          retention-days: 7
