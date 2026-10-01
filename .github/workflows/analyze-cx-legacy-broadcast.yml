@@ -1,0 +1,118 @@
+name: Analyze CX legacy broadcast sinks
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/analyze-cx-legacy-broadcast.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FW_URL: https://gscs-b2c.lge.com/downloadFile?fileId=Y4IONzJGIHWYuTO4uhPVZA
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake liblzo2-dev libssl-dev libc6-dev zlib1g-dev \
+            fakeroot squashfs-tools unzip lz4 xxd \
+            binutils binutils-arm-linux-gnueabihf
+
+      - name: Download and extract firmware
+        run: |
+          set -euxo pipefail
+          mkdir -p work/zip work/extract work/report
+          curl --fail --location --retry 3 --retry-delay 5 -o work/firmware.zip "$FW_URL"
+          unzip -q work/firmware.zip -d work/zip
+          EPK="$(find work/zip -type f -iname '*.epk' -print -quit)"
+          test -n "$EPK"
+          cp "$EPK" work/extract/firmware.epk
+
+          git clone --depth 1 https://github.com/openlgtv/epk2extract.git work/epk2extract
+          (
+            cd work/epk2extract
+            CMAKE_FLAGS=-DCMAKE_BUILD_TYPE=Test ./build.sh
+          )
+          BIN="$(realpath work/epk2extract/build_linux/epk2extract)"
+          (
+            cd work/extract
+            fakeroot "$BIN" firmware.epk
+          ) 2>&1 | tee work/report/epk-extract.log
+
+          ROOTFS="$(find work/extract -type f -name 'rootfs.pak' -print -quit)"
+          if [ -n "$ROOTFS" ] && ! find work/extract -type d -name 'rootfs.pak.unsquashfs' -print -quit | grep -q .; then
+            ROOTDIR="$(dirname "$ROOTFS")"
+            ROOTBASE="$(basename "$ROOTFS")"
+            (
+              cd "$ROOTDIR"
+              fakeroot "$BIN" "$ROOTBASE"
+            ) 2>&1 | tee -a work/report/rootfs-extract.log
+          fi
+
+      - name: Analyze legacy broadcast sink and VSM paths
+        run: |
+          set -euxo pipefail
+          REPORT=work/report/legacy-broadcast-sinks.txt
+          LB="$(find work/extract -type f -path '*/usr/sbin/legacy-broadcast' -print -quit)"
+          test -n "$LB"
+
+          {
+            echo "# legacy-broadcast sink/VSM analysis"
+            echo "binary=$LB"
+            ls -lh "$LB"
+            sha256sum "$LB"
+            file "$LB" || true
+            echo
+
+            echo "## Related schemas / manifests"
+            find work/extract -type f \( \
+              -iname '*vsm*.schema*' -o \
+              -iname '*sink*.schema*' -o \
+              -iname '*legacybroadcast*.json' -o \
+              -iname '*video*sink*' \
+            \) -print | sort | head -2000
+            echo
+
+            echo "## Schema contents matching sink/VSM"
+            while IFS= read -r f; do
+              echo "===== $f ====="
+              sed -n '1,500p' "$f" 2>/dev/null || true
+            done < <(find work/extract -type f \( -iname '*vsm*.schema*' -o -iname '*sink*.schema*' \) -print | sort)
+            echo
+
+            echo "## Dynamic symbols of interest"
+            arm-linux-gnueabihf-readelf -Ws "$LB" 2>/dev/null | c++filt | grep -Ei \
+              'AVProxySetSink|setSink|SinkInfo|VSM|videosink|registerPipeline|GetVideoPathByPipelineID|PipelineIdConnected|VideoPath|AVProxy' \
+              | head -3000 || true
+            echo
+
+            echo "## Strings of interest"
+            strings -a -t x "$LB" | grep -Ei \
+              'setSink|sinkInfo|sinkType|sinkName|videosink|vsmif|VSM|AVProxy|pipelineId|videoPath|shared.?memory|shm|socket|tcp|udp|rtp|rtsp|file|memory|MAIN|SUB|VDEC|VDO|display' \
+              | head -8000 || true
+            echo
+
+            echo "## Calls to AVProxySetSink / sink-related PLT entries"
+            arm-linux-gnueabihf-objdump -d -C "$LB" 2>/dev/null | grep -n -B30 -A90 -E \
+              'AVProxySetSink|SetSink|setSink|GetVideoPathByPipelineID|registerPipeline|unRegisterPipeline' \
+              | head -12000 || true
+          } > "$REPORT" 2>&1
+
+          cat "$REPORT"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cx-legacy-broadcast-analysis
+          path: work/report/
+          retention-days: 7
